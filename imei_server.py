@@ -369,7 +369,7 @@ $('#checkForm').addEventListener('submit', async e => {
     out.className = "result " + (d.luhn ? "good" : "bad");
     out.textContent = `${d.luhn ? "Valid" : "Bad check digit"} · ${d.db_model}`;
   }catch(err){ out.className = "result bad"; out.textContent = "error: " + err; }
-};
+});
 
 if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.3.1
+
+- Fix a JavaScript syntax error that prevented the generator, copy action,
+  checker and service-worker registration from running.
+- Add a regression assertion for the check-form listener closure.
+
 ## 1.3.0
 
 - The 22 MB TAC csv is no longer committed. Render and Docker fetch it during

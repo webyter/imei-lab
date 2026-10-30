@@ -99,6 +99,13 @@ class ServerTests(unittest.TestCase):
         self.assertIn("javascript", headers["Content-Type"])
         self.assertIn(b"fetch", body)
 
+    def test_checker_listener_is_closed(self):
+        _, _, body = get(self.port, "/")
+        self.assertIn(
+            b'catch(err){ out.className = "result bad"; out.textContent = "error: " + err; }\n});',
+            body,
+        )
+
     def test_index_has_controls(self):
         _, _, body = get(self.port, "/")
         for needle in (b'id="count"', b'id="batch"', b'id="checkForm"', b'rel="manifest"'):
