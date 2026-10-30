@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.4.1
+
+- `imei_server.main()` accepts an argv list again, which the port-range test
+  needs; without it that test raised `TypeError` instead of asserting.
+- Behind a proxy the rate-limit key is now the last `X-Forwarded-For` entry (the
+  one our proxy appends) instead of the first, which a client can forge to get a
+  fresh budget per request.
+- `TRUST_PROXY`'s Render auto-detection treats `RENDER=0`/`false` as off.
+- The clipboard fallback keeps its textarea off-screen instead of flashing it.
+
+## 1.4.0
+
+- Give the web app and installed PWA a light theme, including matching browser
+  chrome, app metadata and icon background.
+- Limit the generation selector to 1, 2 or 3 and keep the configured iPhone
+  minimum strict instead of silently falling back to older models.
+- Reject malformed or undersized TAC data, preserve active rate-limit buckets
+  at capacity, and reject out-of-range server ports.
+- Clear stale generated results and report clipboard failures; add a JavaScript
+  syntax check and use unique temporary files for concurrent data refreshes.
+
 ## 1.3.1
 
 - Fix a JavaScript syntax error that prevented the generator, copy action,

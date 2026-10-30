@@ -12,13 +12,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sys
+import tempfile
 import urllib.request
 from pathlib import Path
 
 import imei_lab as t
 
-MIN_ROWS = 200_000
+MIN_ROWS = t.MIN_DB_TACS
 
 
 def _download(url: str, dest: Path) -> None:
@@ -33,7 +35,10 @@ def _count_rows(path: Path) -> int:
         reader = csv.reader(f)
         next(reader, None)
         for row in reader:
-            if len(row) >= 3 and row[1]:
+            if len(row) < 3:
+                continue
+            tac = row[1].strip()
+            if row[0].strip() and len(tac) == 8 and tac.isascii() and tac.isdigit():
                 rows += 1
     return rows
 
@@ -47,17 +52,22 @@ def main(argv=None) -> int:
         "--min-rows",
         type=int,
         default=MIN_ROWS,
-        help=f"refuse a download with fewer rows (default: {MIN_ROWS})",
+        help=f"minimum valid rows and unique TACs (default: {MIN_ROWS})",
     )
     args = ap.parse_args(argv)
+    if args.min_rows < 1:
+        ap.error("--min-rows must be at least 1")
 
     dest = Path(args.dest)
-    tmp = dest.with_suffix(".part")
-    tmp.parent.mkdir(parents=True, exist_ok=True)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f"{dest.name}.", suffix=".part", dir=dest.parent)
+    os.close(fd)
+    tmp = Path(tmp_name)
 
     print(f"downloading {args.url}", file=sys.stderr, flush=True)
     try:
         _download(args.url, tmp)
+        os.chmod(tmp, 0o644)
     except Exception as e:  # noqa: BLE001
         tmp.unlink(missing_ok=True)
         print(f"error: download failed: {e}", file=sys.stderr)
@@ -75,9 +85,12 @@ def main(argv=None) -> int:
     size = tmp.stat().st_size / 1_000_000
     print(f"{rows} rows, {len(db)} TACs, {iphones} iPhones, {size:.1f} MB")
 
-    if rows < args.min_rows:
+    if rows < args.min_rows or len(db) < args.min_rows:
         tmp.unlink(missing_ok=True)
-        print(f"error: only {rows} rows, expected at least {args.min_rows}", file=sys.stderr)
+        print(
+            f"error: only {rows} valid rows and {len(db)} unique TACs, expected at least {args.min_rows} of each",
+            file=sys.stderr,
+        )
         return 1
 
     if args.dry_run:

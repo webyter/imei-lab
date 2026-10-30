@@ -52,15 +52,19 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 # Render (and most PaaS) front the app with a proxy, so the peer address is the
 # proxy's. Trust the forwarded header only when something says we are behind one.
-TRUST_PROXY = _env_flag("TRUST_PROXY", default=bool(os.environ.get("RENDER")))
+TRUST_PROXY = _env_flag("TRUST_PROXY", default=_env_flag("RENDER"))
 
 
 def _client_ip(handler: BaseHTTPRequestHandler) -> str:
-    """Rate-limit key: the visitor's address, taken from X-Forwarded-For behind a proxy."""
+    """Rate-limit key: the visitor's address, taken from the proxy-added X-Forwarded-For entry.
+
+    The header is client-writable, so only its last entry is trusted: that is the
+    one our own proxy appends, while anything before it may be forged.
+    """
     if TRUST_PROXY:
-        first = handler.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-        if first:
-            return first
+        entries = [part.strip() for part in handler.headers.get("X-Forwarded-For", "").split(",") if part.strip()]
+        if entries:
+            return entries[-1]
     return handler.client_address[0]
 
 
@@ -77,28 +81,29 @@ def _iphone_num(specs: str) -> int:
 def init_data() -> None:
     global DB, IPHONE_TACS
     DB = t.load_db(t.ensure_db())
-    min_v = _env_int("IMEI_MIN_IPHONE", 13)
+    if not DB:
+        raise RuntimeError("TAC database contains no valid 8-digit records")
+    min_v = max(0, _env_int("IMEI_MIN_IPHONE", 13))
     all_iphones = [(tac, b, s) for tac, (b, s) in DB.items() if b.upper() == "APPLE" and "IPHONE" in s.upper()]
     IPHONE_TACS = [x for x in all_iphones if _iphone_num(x[2]) >= min_v]
-    if not IPHONE_TACS:  # never end up with an empty pool
-        IPHONE_TACS = all_iphones
 
 PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<meta name="theme-color" content="#0b0d12">
+<meta name="theme-color" content="#f4f7fb">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="IMEI Lab">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>IMEI Lab</title>
 <style>
   :root{
-    --fg:#eef1f7; --mut:#8b93a7; --line:rgba(255,255,255,.09);
-    --acc1:#5b8cff; --acc2:#8b5cf6; --ok:#34d399;
+    color-scheme:light;
+    --fg:#1f2937; --mut:#667085; --line:rgba(31,41,55,.13);
+    --acc1:#4f7ff0; --acc2:#8054df; --ok:#087443;
   }
   *{box-sizing:border-box;}
   html{-webkit-text-size-adjust:100%; touch-action:pan-x pan-y;}
@@ -106,25 +111,25 @@ PAGE = r"""<!doctype html>
     margin:0; min-height:100vh; min-height:100dvh;
     display:flex; flex-direction:column;
     font:16px/1.55 ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    color:var(--fg); background:#0b0d12;
+    color:var(--fg); background:#f4f7fb;
     background-image:
-      radial-gradient(60rem 40rem at 15% -10%, rgba(91,140,255,.18), transparent 60%),
-      radial-gradient(50rem 40rem at 110% 110%, rgba(139,92,246,.20), transparent 55%),
-      radial-gradient(40rem 30rem at 50% 120%, rgba(52,211,153,.08), transparent 60%);
+      radial-gradient(60rem 40rem at 15% -10%, rgba(91,140,255,.12), transparent 60%),
+      radial-gradient(50rem 40rem at 110% 110%, rgba(139,92,246,.11), transparent 55%),
+      radial-gradient(40rem 30rem at 50% 120%, rgba(52,211,153,.06), transparent 60%);
     padding:clamp(10px,4vw,24px);
   }
   .app{
     width:100%; max-width:480px; margin:auto; position:relative;
     padding:clamp(20px,6vw,34px) clamp(16px,5.5vw,32px) clamp(16px,4.5vw,26px);
     border-radius:clamp(18px,6vw,26px); text-align:center;
-    background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.025));
+    background:linear-gradient(180deg,rgba(255,255,255,.97),rgba(255,255,255,.90));
     border:1px solid var(--line);
-    box-shadow:0 30px 80px -30px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.06);
+    box-shadow:0 24px 60px -30px rgba(31,41,55,.25), inset 0 1px 0 rgba(255,255,255,.9);
     backdrop-filter:blur(18px) saturate(140%);
     -webkit-backdrop-filter:blur(18px) saturate(140%);
   }
   .brand{display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:4px;}
-  .brand svg{width:26px; height:26px; filter:drop-shadow(0 2px 8px rgba(91,140,255,.5));}
+  .brand svg{width:26px; height:26px; filter:drop-shadow(0 2px 8px rgba(91,140,255,.35));}
   .brand h1{font-size:16px; font-weight:650; letter-spacing:.3px; margin:0;}
   .head{display:flex; align-items:center; justify-content:center; gap:10px;
     margin:0 0 clamp(12px,4vw,22px);}
@@ -133,13 +138,13 @@ PAGE = r"""<!doctype html>
   .screen{
     position:relative; padding:clamp(16px,5vw,26px) clamp(10px,4vw,18px) clamp(14px,4vw,22px);
     border-radius:clamp(14px,4vw,18px);
-    background:rgba(0,0,0,.28); border:1px solid var(--line);
-    box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+    background:#f7f9fc; border:1px solid var(--line);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.9);
     overflow:hidden;
   }
   .screen::before{
     content:""; position:absolute; inset:0;
-    background:linear-gradient(115deg,transparent 30%,rgba(255,255,255,.045) 50%,transparent 70%);
+    background:linear-gradient(115deg,transparent 30%,rgba(91,140,255,.10) 50%,transparent 70%);
     transform:translateX(-100%);
   }
   .screen.loading::before{animation:sweep 1s ease;}
@@ -149,9 +154,9 @@ PAGE = r"""<!doctype html>
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
     font-size:min(5.6vw,30px); font-weight:600; letter-spacing:.05em;
     line-height:1.3; white-space:nowrap; min-height:1.3em;
-    background:linear-gradient(180deg,#fff,#c9d3ea);
+    background:linear-gradient(180deg,#24334b,#52627a);
     -webkit-background-clip:text; background-clip:text; color:transparent;
-    text-shadow:0 0 30px rgba(120,160,255,.15);
+    text-shadow:0 0 24px rgba(91,140,255,.10);
     transition:opacity .18s ease;
   }
   .imei.pop{animation:pop .28s ease;}
@@ -160,7 +165,7 @@ PAGE = r"""<!doctype html>
   .meta{
     margin-top:14px; display:inline-block; max-width:100%;
     font-size:12.5px; color:var(--mut); padding:6px 12px; border-radius:999px;
-    background:rgba(255,255,255,.045); border:1px solid var(--line);
+    background:rgba(31,41,55,.045); border:1px solid var(--line);
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
 
@@ -175,24 +180,25 @@ PAGE = r"""<!doctype html>
   button svg{width:18px; height:18px;}
   .primary{
     color:#fff; background:linear-gradient(135deg,var(--acc1),var(--acc2));
-    box-shadow:0 12px 30px -10px rgba(91,140,255,.7), inset 0 1px 0 rgba(255,255,255,.25);
+    box-shadow:0 12px 30px -10px rgba(91,140,255,.45), inset 0 1px 0 rgba(255,255,255,.3);
   }
-  .primary:hover{box-shadow:0 16px 38px -10px rgba(120,140,255,.85);}
+  .primary:hover{box-shadow:0 16px 38px -10px rgba(91,120,220,.5);}
   .secondary{
-    color:var(--fg); background:rgba(255,255,255,.05); border-color:var(--line);
+    color:var(--fg); background:#f1f4f9; border-color:var(--line);
   }
-  .secondary:hover{background:rgba(255,255,255,.09);}
-  .secondary.copied{color:#06251b; border-color:var(--ok);
-    background:var(--ok); box-shadow:0 10px 26px -12px rgba(52,211,153,.8);}
+  .secondary:hover{background:#e9eef6;}
+  .secondary.copied{color:#064e3b; border-color:#a7e3c5;
+    background:#d1fae5; box-shadow:0 8px 20px -12px rgba(8,116,67,.35);}
   button:disabled{opacity:.6; cursor:default;}
 
   .foot{color:var(--mut); font-size:11px; margin:clamp(12px,4vw,20px) 0 0; letter-spacing:.2px;}
+  .copyright{color:var(--mut); font-size:11px; margin:5px 0 0; letter-spacing:.1px;}
   .dot{display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--ok);
-    margin-right:6px; vertical-align:middle; box-shadow:0 0 8px var(--ok);}
+    margin-right:6px; vertical-align:middle; box-shadow:0 0 8px rgba(8,116,67,.35);}
 
   .count{
     font:inherit; font-size:12px; color:var(--mut); cursor:pointer;
-    background:rgba(255,255,255,.05); border:1px solid var(--line);
+    background:#f1f4f9; border:1px solid var(--line);
     border-radius:999px; padding:2px 4px 2px 8px;
   }
   .count:focus-visible{outline:2px solid var(--acc1); outline-offset:2px;}
@@ -203,27 +209,27 @@ PAGE = r"""<!doctype html>
   .batch li{
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:12px;
     padding:5px 9px; border-radius:8px; cursor:pointer; color:var(--fg);
-    background:rgba(255,255,255,.045); border:1px solid var(--line);
+    background:#f8fafc; border:1px solid var(--line);
   }
-  .batch li.copied{color:#06251b; background:var(--ok); border-color:var(--ok);}
+  .batch li.copied{color:#064e3b; background:#d1fae5; border-color:#a7e3c5;}
 
   .check{display:flex; gap:8px; margin-top:clamp(12px,4vw,18px);}
   .field{
     flex:1; min-width:0; font:inherit; font-size:16px; color:var(--fg);
-    background:rgba(0,0,0,.28); border:1px solid var(--line); border-radius:11px;
+    background:#f8fafc; border:1px solid var(--line); border-radius:11px;
     padding:10px 12px;
   }
   .field::placeholder{color:var(--mut);}
-  .field:focus{outline:none; border-color:rgba(91,140,255,.6);}
+  .field:focus{outline:none; border-color:rgba(79,127,240,.65); box-shadow:0 0 0 3px rgba(79,127,240,.12);}
   .ghost{
     flex:0 0 auto; padding:10px 16px; border-radius:11px; font-size:14px;
-    color:var(--fg); background:rgba(255,255,255,.06); border-color:var(--line);
+    color:var(--fg); background:#f1f4f9; border-color:var(--line);
   }
-  .ghost:hover{background:rgba(255,255,255,.1);}
+  .ghost:hover{background:#e9eef6;}
   .result{margin:10px 0 0; font-size:12px; color:var(--mut); min-height:1.2em;
     overflow-wrap:anywhere;}
   .result.good{color:var(--ok);}
-  .result.bad{color:#fca5a5;}
+  .result.bad{color:#b42318;}
 
   /* Narrow phones: keep both buttons on one row. */
   @media (max-width:340px){
@@ -259,9 +265,8 @@ PAGE = r"""<!doctype html>
       <p class="tag">Generate a valid iPhone IMEI</p>
       <select id="count" class="count" aria-label="How many IMEIs">
         <option value="1">1</option>
-        <option value="5">5</option>
-        <option value="10">10</option>
-        <option value="25">25</option>
+        <option value="2">2</option>
+        <option value="3">3</option>
       </select>
     </div>
 
@@ -291,6 +296,7 @@ PAGE = r"""<!doctype html>
     <p class="result" id="result">Paste an IMEI to validate it offline.</p>
 
     <p class="foot"><span class="dot"></span>Valid Luhn · real TAC · may match a real device</p>
+    <p class="copyright">© 𝑺𝒕𝒆𝒗. 𝐃𝐎𝐆𝐁𝐘𝐓𝐄 🦴</p>
   </main>
 
 <script>
@@ -311,15 +317,36 @@ let current = "";
 const fmt = d => d.length === 15 ? `${d.slice(0,2)} ${d.slice(2,8)} ${d.slice(8,14)} ${d.slice(14)}` : d;
 
 async function copyText(text, el){
-  try{ await navigator.clipboard.writeText(text); }
-  catch{ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-  if(el){ el.classList.add('copied'); setTimeout(()=>el.classList.remove('copied'), 900); }
+  let copied = false;
+  try{ await navigator.clipboard.writeText(text); copied = true; }
+  catch{
+    const ta=document.createElement('textarea'); ta.value=text;
+    ta.style.position='fixed'; ta.style.top='-1000px'; ta.style.opacity='0';
+    document.body.appendChild(ta);
+    try{ ta.select(); copied = document.execCommand('copy'); }
+    catch{ copied = false; }
+    finally{ ta.remove(); }
+  }
+  if(el){
+    el.classList.toggle('copied', copied);
+    if(copied) setTimeout(()=>el.classList.remove('copied'), 900);
+  }
+  return copied;
 }
 
 function showCopy(copied){
   const c = $('#copy');
   c.classList.toggle('copied', copied);
   c.lastChild.textContent = copied ? " Copied" : " Copy";
+}
+
+function showGenerationError(message){
+  current = "";
+  $('#imei').textContent = "—";
+  $('#batch').textContent = "";
+  $('#batch').hidden = true;
+  $('#meta').textContent = message;
+  showCopy(false);
 }
 
 async function generate(){
@@ -330,7 +357,10 @@ async function generate(){
   try{
     const r = await fetch(`/api/generate?count=${count}`);
     const d = await r.json();
-    if(d.error){ metaEl.textContent = d.error; return; }
+    if(!r.ok || d.error || !Array.isArray(d.items) || !d.items.length){
+      showGenerationError(d.error || `generation failed (${r.status})`);
+      return;
+    }
     const items = d.items;
     current = items.map(i => i.imei).join("\n");
     imeiEl.textContent = fmt(items[0].imei);
@@ -346,13 +376,18 @@ async function generate(){
     });
     list.hidden = list.children.length === 0;
     showCopy(false);
-  }catch(e){ metaEl.textContent = "error: " + e; }
+  }catch(e){ showGenerationError("error: " + e); }
 }
 
 $('#gen').onclick = generate;
 $('#copy').onclick = async () => {
   if(!current) return;
-  await copyText(current, null);
+  if(!await copyText(current, null)){
+    showCopy(false);
+    $('#copy').lastChild.textContent = " Copy failed";
+    setTimeout(()=>showCopy(false), 1300);
+    return;
+  }
   showCopy(true);
   setTimeout(()=>showCopy(false), 1300);
 };
@@ -387,8 +422,8 @@ MANIFEST = {
     "start_url": "/",
     "scope": "/",
     "display": "standalone",
-    "background_color": "#0b0d12",
-    "theme_color": "#0b0d12",
+    "background_color": "#f4f7fb",
+    "theme_color": "#f4f7fb",
     "icons": [
         {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
         {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
@@ -396,7 +431,7 @@ MANIFEST = {
 }
 
 SERVICE_WORKER = """\
-const CACHE = 'imei-lab-1';
+const CACHE = 'imei-lab-2';
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.add('/')));
@@ -430,7 +465,7 @@ def _png_chunk(tag: bytes, data: bytes) -> bytes:
 
 def make_icon(size: int) -> bytes:
     """Render the app icon: a rounded gradient tile on the page background, as a PNG."""
-    bg = (0x0B, 0x0D, 0x12)
+    bg = (0xF4, 0xF7, 0xFB)
     top = (0x5B, 0x8C, 0xFF)
     bottom = (0x8B, 0x5C, 0xF6)
     inset = size * 0.16
@@ -488,7 +523,7 @@ class RateLimiter:
     def __init__(self, limit: int = 120, window: float = 60.0, max_keys: int = 10_000) -> None:
         self.limit = limit
         self.window = window
-        self.max_keys = max_keys
+        self.max_keys = max(1, max_keys)
         self._buckets: dict[str, list[float]] = {}
         self._lock = threading.Lock()
 
@@ -499,8 +534,9 @@ class RateLimiter:
                 cutoff = now - self.window
                 for k in [k for k, v in self._buckets.items() if not v or v[-1] <= cutoff]:
                     del self._buckets[k]
-                if len(self._buckets) >= self.max_keys:
-                    self._buckets.clear()
+                if len(self._buckets) >= self.max_keys and key not in self._buckets:
+                    next_expiry = min(v[-1] + self.window for v in self._buckets.values() if v)
+                    return False, max(1, math.ceil(next_expiry - now))
             bucket = self._buckets.setdefault(key, [])
             cutoff = now - self.window
             while bucket and bucket[0] <= cutoff:
@@ -511,7 +547,7 @@ class RateLimiter:
             return True, 0
 
 
-LIMITER = RateLimiter(limit=_env_int("RATE_LIMIT", 120))
+LIMITER = RateLimiter(limit=max(1, _env_int("RATE_LIMIT", 120)))
 # Bounds the outbound work a single visitor can pile up through ?online=1.
 ONLINE_SLOTS = threading.BoundedSemaphore(max(1, _env_int("ONLINE_CONCURRENCY", 4)))
 
@@ -576,7 +612,7 @@ def _check(imei: str, online: bool) -> dict:
         "db_model": t._fmt(*hit) if hit else "(TAC not in database)",
     }
     if online:
-        timeout = _env_int("ONLINE_TIMEOUT", 10)
+        timeout = max(1, _env_int("ONLINE_TIMEOUT", 10))
         out["online"] = [
             t.check_imeiproof(imei, timeout=timeout),
             t.check_imei_org(imei, timeout=timeout),
@@ -647,7 +683,7 @@ def start_keepalive() -> None:
     KEEPALIVE_URL to any public base URL. Disable with KEEPALIVE=0.
     """
     url = os.environ.get("KEEPALIVE_URL") or os.environ.get("RENDER_EXTERNAL_URL")
-    if not url or os.environ.get("KEEPALIVE", "1").lower() in ("0", "false", "no", "off"):
+    if not url or os.environ.get("KEEPALIVE", "1").strip().lower() in ("0", "false", "no", "off"):
         return
     target = url.rstrip("/") + "/health"
     try:
@@ -670,12 +706,14 @@ def start_keepalive() -> None:
     print(f"keepalive enabled: {target} every {interval}s", flush=True)
 
 
-def main() -> int:
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="imei_server", description="IMEI Lab generator web app")
     ap.add_argument("--version", action="version", version=f"%(prog)s {t.__version__}")
     ap.add_argument("--host", default=os.environ.get("HOST") or "127.0.0.1")
     ap.add_argument("--port", type=int, default=_env_int("PORT", 8000))
-    args = ap.parse_args()
+    args = ap.parse_args(argv)
+    if not 0 <= args.port <= 65535:
+        ap.error("--port must be between 0 and 65535")
     try:
         init_data()
     except Exception as e:  # noqa: BLE001

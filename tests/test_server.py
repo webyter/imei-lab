@@ -2,7 +2,10 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import struct
+import subprocess
+import tempfile
 import threading
 import unittest
 import urllib.error
@@ -54,6 +57,7 @@ class ServerTests(unittest.TestCase):
         code, headers, body = get(self.port, "/")
         self.assertEqual(code, 200)
         self.assertIn(b"IMEI Lab", body)
+        self.assertIn("© 𝑺𝒕𝒆𝒗. 𝐃𝐎𝐆𝐁𝐘𝐓𝐄 🦴".encode(), body)
         self.assertIn("Content-Security-Policy", headers)
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
 
@@ -63,6 +67,23 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"max-width:480px", body)
         self.assertIn(b"min-height:100dvh", body)
         self.assertIn(b"@media (max-height:560px)", body)
+
+    def test_index_uses_light_theme(self):
+        _, _, body = get(self.port, "/")
+        self.assertIn(b'content="#f4f7fb"', body)
+        self.assertIn(b"color-scheme:light", body)
+        self.assertIn(b"background:#f4f7fb", body)
+
+    def test_inline_script_is_valid_javascript(self):
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node.js is not installed")
+        script = s.PAGE.split("<script>", 1)[1].split("</script>", 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "page.js"
+            path.write_text(script, encoding="utf-8")
+            result = subprocess.run([node, "--check", str(path)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_index_disables_zooming(self):
         _, _, body = get(self.port, "/")
@@ -79,6 +100,8 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIn("manifest+json", headers["Content-Type"])
         self.assertEqual(data["start_url"], "/")
+        self.assertEqual(data["theme_color"], "#f4f7fb")
+        self.assertEqual(data["background_color"], "#f4f7fb")
         self.assertEqual([i["sizes"] for i in data["icons"]], ["192x192", "512x512"])
 
     def test_icons_are_png(self):
@@ -98,6 +121,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertIn("javascript", headers["Content-Type"])
         self.assertIn(b"fetch", body)
+        self.assertIn(b"imei-lab-2", body)
 
     def test_checker_listener_is_closed(self):
         _, _, body = get(self.port, "/")
@@ -110,6 +134,14 @@ class ServerTests(unittest.TestCase):
         _, _, body = get(self.port, "/")
         for needle in (b'id="count"', b'id="batch"', b'id="checkForm"', b'rel="manifest"'):
             self.assertIn(needle, body)
+
+    def test_count_selector_offers_one_to_three(self):
+        _, _, body = get(self.port, "/")
+        for value in (1, 2, 3):
+            option = f'<option value="{value}">{value}</option>'.encode()
+            self.assertIn(option, body)
+        for value in (5, 10, 25):
+            self.assertNotIn(f'<option value="{value}">'.encode(), body)
 
     def test_health(self):
         code, _, body = get(self.port, "/health")
@@ -243,11 +275,19 @@ class IPhonePoolTests(unittest.TestCase):
     def test_default_pool_starts_at_iphone_13(self):
         self.assertEqual(self.init_pool(), {"35729040", "35729041"})
 
+    def test_empty_database_is_rejected(self):
+        with (
+            mock.patch.object(s.t, "load_db", return_value={}),
+            mock.patch.object(s.t, "ensure_db", return_value=Path("unused.csv")),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "valid 8-digit"):
+                s.init_data()
+
     def test_zero_includes_pre13_and_unnumbered_models(self):
         self.assertEqual(self.init_pool("0"), self.ALL_IPHONES)
 
-    def test_falls_back_to_whole_pool(self):
-        self.assertEqual(self.init_pool("17"), self.ALL_IPHONES)
+    def test_empty_when_no_models_meet_minimum(self):
+        self.assertEqual(self.init_pool("17"), set())
 
     def test_iphone_num(self):
         self.assertEqual(s._iphone_num("APPLE IPHONE XS, Apple iPhone XS, A1920"), 0)
@@ -331,6 +371,25 @@ class RateLimiterTests(unittest.TestCase):
             limiter.allow("d")
             self.assertEqual(list(limiter._buckets), ["d"])
 
+    def test_full_key_table_does_not_reset_active_limits(self):
+        clock = FakeClock()
+        with mock.patch.object(s.time, "monotonic", clock):
+            limiter = s.RateLimiter(limit=1, window=60, max_keys=2)
+            self.assertTrue(limiter.allow("a")[0])
+            self.assertTrue(limiter.allow("b")[0])
+            self.assertFalse(limiter.allow("c")[0])
+            self.assertFalse(limiter.allow("a")[0])
+            self.assertEqual(set(limiter._buckets), {"a", "b"})
+
+
+class ServerConfigTests(unittest.TestCase):
+    def test_main_rejects_out_of_range_ports(self):
+        for port in ("-1", "65536"):
+            with contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    s.main(["--port", port])
+            self.assertEqual(error.exception.code, 2)
+
 
 class EnvFlagTests(unittest.TestCase):
     def test_truthy(self):
@@ -359,7 +418,11 @@ class ClientIpTests(unittest.TestCase):
 
     def test_uses_forwarded_for_behind_proxy(self):
         with mock.patch.object(s, "TRUST_PROXY", True):
-            self.assertEqual(s._client_ip(self.handler(forwarded="9.9.9.9, 10.0.0.1")), "9.9.9.9")
+            self.assertEqual(s._client_ip(self.handler(forwarded="10.0.0.1")), "10.0.0.1")
+
+    def test_ignores_client_supplied_forwarded_entries(self):
+        with mock.patch.object(s, "TRUST_PROXY", True):
+            self.assertEqual(s._client_ip(self.handler(forwarded="9.9.9.9, 10.0.0.1")), "10.0.0.1")
 
     def test_ignores_empty_forwarded_header(self):
         with mock.patch.object(s, "TRUST_PROXY", True):

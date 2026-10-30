@@ -45,6 +45,12 @@ class RefreshTests(unittest.TestCase):
         self.assertIn("2 TACs", out)
         self.assertIn("APPLE", self.dest.read_text(encoding="utf-8"))
 
+    def test_minimum_must_be_positive(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                r.main(["--dest", str(self.dest), "--min-rows", "0"])
+        self.assertFalse(self.dest.exists())
+
     def test_rejects_short_file(self):
         code, _, err = self.run_refresh("--min-rows", "10")
         self.assertEqual(code, 1)
@@ -68,6 +74,36 @@ class RefreshTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("download failed", err.getvalue())
         self.assertFalse(self.dest.exists())
+
+    def test_rejects_duplicate_only_dataset(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = (
+            b"Brand,TAC,SPECS\n"
+            b"APPLE,35729040,Model A\n"
+            b"APPLE,35729040,Model B\n"
+        )
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            mock.patch.object(r.urllib.request, "urlopen", return_value=response),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            code = r.main(["--dest", str(self.dest), "--min-rows", "2"])
+        self.assertEqual(code, 1)
+        self.assertIn("1 unique TACs", err.getvalue())
+        self.assertFalse(self.dest.exists())
+
+    def test_count_rows_ignores_invalid_tacs(self):
+        invalid = Path(self.tmp.name) / "invalid.csv"
+        invalid.write_text(
+            "Brand,TAC,SPECS\n"
+            "APPLE,123,Short TAC\n"
+            "APPLE,ABCDEFGH,Non-numeric TAC\n"
+            ",35729040,Missing brand\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(r._count_rows(invalid), 0)
 
 
 if __name__ == "__main__":

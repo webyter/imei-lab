@@ -20,10 +20,13 @@ class LuhnTests(unittest.TestCase):
         self.assertFalse(t.luhn_valid("490154203237519"))
         self.assertFalse(t.luhn_valid("49015420323751"))
         self.assertFalse(t.luhn_valid("49015420323751x"))
+        self.assertFalse(t.luhn_valid("٤90154203237518"))
 
     def test_check_digit_rejects_non_digits(self):
         with self.assertRaises(ValueError):
             t.check_digit("12ab")
+        with self.assertRaises(ValueError):
+            t.check_digit("١23")
 
 
 class DatabaseTests(unittest.TestCase):
@@ -31,7 +34,7 @@ class DatabaseTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.csv = Path(self.tmp.name) / "tac.csv"
         self.csv.write_text(
-            "Brand,TAC,SPECS\n"
+            "\ufeffBrand,TAC,SPECS\n"
             "APPLE,35729040,\"APPLE IPHONE 13, Apple iPhone 13, A2634, 2021\"\n"
             "SAMSUNG,35332510,\"SAMSUNG GALAXY S9\"\n"
             "badrow,,\n",
@@ -46,6 +49,17 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(len(db), 2)
         self.assertEqual(db["35729040"][0], "APPLE")
         self.assertIn("iPhone 13", db["35729040"][1])
+
+    def test_load_db_ignores_invalid_tac_rows(self):
+        invalid = Path(self.tmp.name) / "invalid.csv"
+        invalid.write_text(
+            "Brand,TAC,SPECS\n"
+            "APPLE,123,Short TAC\n"
+            "APPLE,ABCDEFGH,Non-numeric TAC\n"
+            ",35729040,Missing brand\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(t.load_db(invalid), {})
 
     def test_ensure_db_explicit(self):
         self.assertEqual(t.ensure_db(self.csv), self.csv)
@@ -196,6 +210,7 @@ class DownloadTests(unittest.TestCase):
             mock.patch.object(t, "BUNDLED_DB", self.dir / "missing.csv"),
             mock.patch.object(t, "DB_PATH", target),
             mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(t, "MIN_DB_TACS", 1),
             mock.patch.object(t.urllib.request, "urlopen", return_value=self.response()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
@@ -209,6 +224,7 @@ class DownloadTests(unittest.TestCase):
             mock.patch.object(t, "BUNDLED_DB", self.dir / "missing.csv"),
             mock.patch.object(t, "DB_PATH", target),
             mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(t, "MIN_DB_TACS", 1),
             mock.patch.object(t.urllib.request, "urlopen", side_effect=[OSError("boom"), self.response()]),
             mock.patch.object(t.time, "sleep"),
             contextlib.redirect_stderr(io.StringIO()),
@@ -229,6 +245,37 @@ class DownloadTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 t.ensure_db()
         self.assertFalse(target.exists())
+
+    def test_rejects_truncated_download(self):
+        target = self.dir / "tac_full.csv"
+        with (
+            mock.patch.object(t, "BUNDLED_DB", self.dir / "missing.csv"),
+            mock.patch.object(t, "DB_PATH", target),
+            mock.patch.object(t, "MIN_DB_TACS", 2),
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(t.urllib.request, "urlopen", return_value=self.response()),
+            mock.patch.object(t.time, "sleep"),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "only 1 unique TACs"):
+                t.ensure_db()
+        self.assertFalse(target.exists())
+
+    def test_rejects_download_without_valid_tacs(self):
+        target = self.dir / "tac_full.csv"
+        response = self.response(b"Brand,TAC,SPECS\nAPPLE,123,Short TAC\n")
+        with (
+            mock.patch.object(t, "BUNDLED_DB", self.dir / "missing.csv"),
+            mock.patch.object(t, "DB_PATH", target),
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(t.urllib.request, "urlopen", return_value=response),
+            mock.patch.object(t.time, "sleep"),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "valid 8-digit"):
+                t.ensure_db()
+        self.assertFalse(target.exists())
+        self.assertEqual(list(self.dir.glob("*.part")), [])
 
 
 if __name__ == "__main__":

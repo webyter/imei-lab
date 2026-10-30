@@ -103,10 +103,10 @@ python3 refresh_db.py            # download, verify and write data/tac_full.csv
 python3 refresh_db.py --dry-run  # report only
 ```
 
-It downloads to a temporary file, checks that it looks like a TAC database (at
-least 200k rows, and loadable), and only then replaces the file, so a failed run
-leaves the current copy untouched. The file is git-ignored, so each machine or
-deploy fetches its own.
+It downloads to a temporary file, checks that it is loadable and contains at
+least 200k valid rows and unique TACs, and only then replaces the file, so a
+failed run leaves the current copy untouched. The file is git-ignored, so each
+machine or deploy fetches its own.
 
 ## Install
 

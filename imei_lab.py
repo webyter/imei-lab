@@ -26,14 +26,16 @@ import os
 import random
 import re
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-__version__ = "1.3.1"
+__version__ = "1.4.1"
 
 DB_URL = "https://raw.githubusercontent.com/MoazEb/tac-database/main/tac_full.csv"
+MIN_DB_TACS = 200_000
 CACHE_DIR = Path(
     os.environ.get("IMEI_LAB_CACHE")
     or os.environ.get("IMEI_TOOL_CACHE")
@@ -46,8 +48,8 @@ UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 # ---------------------------------------------------------------- Luhn
 def check_digit(digits: str) -> int:
     """Luhn check digit for the first 14 digits of an IMEI."""
-    if not digits.isdigit():
-        raise ValueError("Luhn input must be digits only")
+    if not digits.isascii() or not digits.isdigit():
+        raise ValueError("Luhn input must contain ASCII digits only")
     total = 0
     for i, ch in enumerate(reversed(digits)):
         d = int(ch)
@@ -60,7 +62,7 @@ def check_digit(digits: str) -> int:
 
 
 def luhn_valid(imei: str) -> bool:
-    return imei.isdigit() and len(imei) == 15 and check_digit(imei[:14]) == int(imei[14])
+    return imei.isascii() and imei.isdigit() and len(imei) == 15 and check_digit(imei[:14]) == int(imei[14])
 
 
 # ---------------------------------------------------------------- database
@@ -80,17 +82,26 @@ def ensure_db(path: Path | None = None) -> Path:
         return DB_PATH
 
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = DB_PATH.with_suffix(".part")
     last_err: Exception | None = None
     for attempt in range(1, 4):
+        fd, tmp_name = tempfile.mkstemp(prefix=f"{DB_PATH.name}.", suffix=".part", dir=DB_PATH.parent)
+        os.close(fd)
+        tmp = Path(tmp_name)
         try:
-            print(f"Downloading TAC database (~12 MB), attempt {attempt}/3 ...", file=sys.stderr, flush=True)
+            print(f"Downloading TAC database, attempt {attempt}/3 ...", file=sys.stderr, flush=True)
             req = urllib.request.Request(DB_URL, headers={"User-Agent": UA})
             with urllib.request.urlopen(req, timeout=180) as resp, open(tmp, "wb") as out:
                 out.write(resp.read())
+            os.chmod(tmp, 0o644)
+            downloaded_db = load_db(tmp)
+            if not downloaded_db:
+                raise RuntimeError("downloaded file contains no valid 8-digit TAC records")
+            if len(downloaded_db) < MIN_DB_TACS:
+                raise RuntimeError(f"downloaded file has only {len(downloaded_db)} unique TACs")
             tmp.replace(DB_PATH)
             return DB_PATH
         except Exception as e:  # noqa: BLE001
+            tmp.unlink(missing_ok=True)
             last_err = e
             time.sleep(2 * attempt)
     raise RuntimeError(f"could not obtain TAC database: {last_err}")
@@ -99,12 +110,15 @@ def ensure_db(path: Path | None = None) -> Path:
 def load_db(path: Path = DB_PATH) -> dict[str, tuple[str, str]]:
     """Return {tac: (brand, specs)}."""
     db: dict[str, tuple[str, str]] = {}
-    with open(path, newline="", encoding="utf-8", errors="replace") as f:
+    with open(path, newline="", encoding="utf-8-sig", errors="replace") as f:
         reader = csv.reader(f)
         next(reader, None)
         for row in reader:
-            if len(row) >= 3 and row[1]:
-                db.setdefault(row[1], (row[0], row[2]))
+            if len(row) < 3:
+                continue
+            brand, tac, specs = row[0].strip(), row[1].strip(), row[2].strip()
+            if brand and len(tac) == 8 and tac.isascii() and tac.isdigit():
+                db.setdefault(tac, (brand, specs))
     return db
 
 
