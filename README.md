@@ -13,9 +13,19 @@ Python with a tiny web UI and a CLI.
 - Ships a single-page web app with generate/copy, health checks and a
   self-pinger for free-tier hosting.
 
-> Generated IMEIs are structurally valid but correspond to no real handset.
+> Generated IMEIs pass the Luhn checksum and carry a real TAC, but no
+> manufacturer or carrier has assigned them. Serials are random, so a generated
+> number can rarely coincide with a real device (about one in a million).
+>
 > eSIM and SIM-lock status live in carrier/device records and **cannot** be
 > derived from an IMEI, so no generated number can pass a real eSIM/unlock check.
+
+## Intended use
+
+IMEI Lab is for testing and research: sample numbers for UI fixtures and
+integration tests, offline validation, and TAC lookups. Generated numbers are
+not registered to any handset and must not be used to impersonate a device,
+defraud a carrier, or get past unlock or eSIM checks.
 
 ## Quick start
 
@@ -32,8 +42,9 @@ cd imei-lab
 HOST=0.0.0.0 ./run.sh
 ```
 
-The TAC database is bundled in `data/tac_full.csv` (275k rows). If it is
-missing, it is downloaded and cached in `~/.cache/imei-lab/`.
+The TAC database is bundled in `data/tac_full.csv` (275k rows, ~22 MB) and
+loaded into memory at startup (a few tens of MB). If it is missing, it is
+downloaded and cached in `~/.cache/imei-lab/`.
 
 The `--brand` and `--model` filters are case-insensitive.
 
@@ -47,7 +58,9 @@ The `--brand` and `--model` filters are case-insensitive.
 | `GET /api/check?imei=<15 digits>&online=1` | Validate/look up |
 
 Endpoints return `400` for invalid input, `429` when rate limited and `503`
-when the iPhone pool is empty.
+when the iPhone pool is empty. `/api/check?...&online=1` makes live requests to
+imeiproof.com and imei.org, so it is concurrency limited and answers `503` with
+`Retry-After` while every slot is busy.
 
 ## Configuration
 
@@ -60,6 +73,9 @@ when the iPhone pool is empty.
 | `RATE_LIMIT` | `120` | Requests per IP per 60s on `/api/*` |
 | `KEEPALIVE` / `KEEPALIVE_URL` | off / `RENDER_EXTERNAL_URL` | Self-ping |
 | `KEEPALIVE_INTERVAL` | `600` | Seconds between self-pings |
+| `TRUST_PROXY` | `1` on Render | Take the client IP from `X-Forwarded-For`, so limiting is per visitor behind a proxy |
+| `ONLINE_CONCURRENCY` | `4` | Concurrent `/api/check?online=1` lookups before it answers `503` |
+| `ONLINE_TIMEOUT` | `10` | Timeout in seconds for those lookups |
 
 Legacy `IMEI_TOOL_DB` / `IMEI_TOOL_CACHE` are still honoured.
 

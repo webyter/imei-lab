@@ -136,6 +136,20 @@ class ServerTests(unittest.TestCase):
         code, _, _ = get(self.port, "/nope")
         self.assertEqual(code, 404)
 
+    def test_check_online_returns_503_when_busy(self):
+        old = s.ONLINE_SLOTS
+        s.ONLINE_SLOTS = threading.BoundedSemaphore(0)
+        try:
+            code, _, body = get(self.port, f"/api/check?imei={self.imei}&online=1")
+        finally:
+            s.ONLINE_SLOTS = old
+        self.assertEqual(code, 503)
+        self.assertIn("busy", json.loads(body)["error"])
+
+    def test_unknown_api_path(self):
+        code, _, _ = get(self.port, "/api/nope")
+        self.assertEqual(code, 404)
+
     def test_rate_limit(self):
         old = s.LIMITER
         s.LIMITER = s.RateLimiter(limit=2, window=60)
@@ -277,6 +291,40 @@ class RateLimiterTests(unittest.TestCase):
             clock.advance(120)  # every bucket is now stale
             limiter.allow("d")
             self.assertEqual(list(limiter._buckets), ["d"])
+
+
+class EnvFlagTests(unittest.TestCase):
+    def test_truthy(self):
+        for raw in ("1", "true", "YES", " on "):
+            with mock.patch.dict(os.environ, {"IMEI_TEST_FLAG": raw}, clear=True):
+                self.assertTrue(s._env_flag("IMEI_TEST_FLAG"), raw)
+
+    def test_falsey_and_default(self):
+        for raw in ("0", "false", "no", "off", ""):
+            with mock.patch.dict(os.environ, {"IMEI_TEST_FLAG": raw}, clear=True):
+                self.assertFalse(s._env_flag("IMEI_TEST_FLAG"), raw)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(s._env_flag("IMEI_TEST_FLAG", default=True))
+
+
+class ClientIpTests(unittest.TestCase):
+    def handler(self, peer="1.2.3.4", forwarded=None):
+        h = mock.MagicMock()
+        h.client_address = (peer, 1234)
+        h.headers = {"X-Forwarded-For": forwarded} if forwarded is not None else {}
+        return h
+
+    def test_uses_peer_by_default(self):
+        with mock.patch.object(s, "TRUST_PROXY", False):
+            self.assertEqual(s._client_ip(self.handler(forwarded="9.9.9.9")), "1.2.3.4")
+
+    def test_uses_forwarded_for_behind_proxy(self):
+        with mock.patch.object(s, "TRUST_PROXY", True):
+            self.assertEqual(s._client_ip(self.handler(forwarded="9.9.9.9, 10.0.0.1")), "9.9.9.9")
+
+    def test_ignores_empty_forwarded_header(self):
+        with mock.patch.object(s, "TRUST_PROXY", True):
+            self.assertEqual(s._client_ip(self.handler(forwarded=" , ")), "1.2.3.4")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -148,6 +149,86 @@ class CliTests(unittest.TestCase):
         code, _, err = self.run_cli("check", "12345", "--db", str(self.csv))
         self.assertEqual(code, 2)
         self.assertIn("15 digits", err)
+
+    def test_generate_json(self):
+        code, out, _ = self.run_cli("generate", "--brand", "apple", "--json", "--db", str(self.csv), "-n", "2")
+        self.assertEqual(code, 0)
+        rows = [json.loads(line) for line in out.strip().splitlines()]
+        self.assertEqual(len(rows), 2)
+        for row in rows:
+            self.assertEqual(row["tac"], "35729040")
+            self.assertEqual(row["brand"], "APPLE")
+            self.assertTrue(t.luhn_valid(row["imei"]))
+
+    def test_check_online_prints_sources(self):
+        proof = {"source": "imeiproof", "model": "Apple iPhone 13", "checksum": "Checksum Passed", "found": True}
+        org = {"source": "imei.org", "status": "found", "model": "iPhone 13"}
+        with (
+            mock.patch.object(t, "check_imeiproof", return_value=proof),
+            mock.patch.object(t, "check_imei_org", return_value=org),
+            mock.patch.object(t.time, "sleep"),
+        ):
+            code, out, _ = self.run_cli("check", self.imei, "--online", "--db", str(self.csv))
+        self.assertEqual(code, 0)
+        self.assertIn("imeiproof", out)
+        self.assertIn("imei.org", out)
+
+
+class DownloadTests(unittest.TestCase):
+    """ensure_db() when no local copy of the TAC csv exists."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def response(self, payload=b'Brand,TAC,SPECS\nAPPLE,35729040,"APPLE IPHONE 13"\n'):
+        resp = mock.MagicMock()
+        resp.__enter__.return_value = resp
+        resp.read.return_value = payload
+        return resp
+
+    def test_downloads_when_no_local_copy(self):
+        target = self.dir / "tac_full.csv"
+        with (
+            mock.patch.object(t, "BUNDLED_DB", self.dir / "missing.csv"),
+            mock.patch.object(t, "DB_PATH", target),
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(t.urllib.request, "urlopen", return_value=self.response()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(t.ensure_db(), target)
+        self.assertTrue(target.exists())
+        self.assertIn("APPLE", target.read_text(encoding="utf-8"))
+
+    def test_retries_before_giving_up(self):
+        target = self.dir / "tac_full.csv"
+        with (
+            mock.patch.object(t, "BUNDLED_DB", self.dir / "missing.csv"),
+            mock.patch.object(t, "DB_PATH", target),
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(t.urllib.request, "urlopen", side_effect=[OSError("boom"), self.response()]),
+            mock.patch.object(t.time, "sleep"),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.assertEqual(t.ensure_db(), target)
+        self.assertTrue(target.exists())
+
+    def test_raises_after_three_failures(self):
+        target = self.dir / "tac_full.csv"
+        with (
+            mock.patch.object(t, "BUNDLED_DB", self.dir / "missing.csv"),
+            mock.patch.object(t, "DB_PATH", target),
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(t.urllib.request, "urlopen", side_effect=OSError("boom")),
+            mock.patch.object(t.time, "sleep"),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            with self.assertRaises(RuntimeError):
+                t.ensure_db()
+        self.assertFalse(target.exists())
 
 
 if __name__ == "__main__":

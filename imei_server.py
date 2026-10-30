@@ -38,6 +38,28 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Read a boolean environment variable (1/true/yes/on)."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
+# Render (and most PaaS) front the app with a proxy, so the peer address is the
+# proxy's. Trust the forwarded header only when something says we are behind one.
+TRUST_PROXY = _env_flag("TRUST_PROXY", default=bool(os.environ.get("RENDER")))
+
+
+def _client_ip(handler: BaseHTTPRequestHandler) -> str:
+    """Rate-limit key: the visitor's address, taken from X-Forwarded-For behind a proxy."""
+    if TRUST_PROXY:
+        first = handler.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+        if first:
+            return first
+    return handler.client_address[0]
+
+
 def _iphone_num(specs: str) -> int:
     """Highest iPhone generation named in the TAC specs, 0 when there is none.
 
@@ -205,7 +227,7 @@ PAGE = r"""<!doctype html>
       </button>
     </div>
 
-    <p class="foot"><span class="dot"></span>Valid Luhn checksum · real TAC · not a real device</p>
+    <p class="foot"><span class="dot"></span>Valid Luhn · real TAC · may match a real device</p>
   </main>
 
 <script>
@@ -299,6 +321,8 @@ class RateLimiter:
 
 
 LIMITER = RateLimiter(limit=_env_int("RATE_LIMIT", 120))
+# Bounds the outbound work a single visitor can pile up through ?online=1.
+ONLINE_SLOTS = threading.BoundedSemaphore(max(1, _env_int("ONLINE_CONCURRENCY", 4)))
 
 
 def _send(
@@ -361,7 +385,11 @@ def _check(imei: str, online: bool) -> dict:
         "db_model": t._fmt(*hit) if hit else "(TAC not in database)",
     }
     if online:
-        out["online"] = [t.check_imeiproof(imei), t.check_imei_org(imei)]
+        timeout = _env_int("ONLINE_TIMEOUT", 10)
+        out["online"] = [
+            t.check_imeiproof(imei, timeout=timeout),
+            t.check_imei_org(imei, timeout=timeout),
+        ]
     return out
 
 
@@ -389,7 +417,7 @@ class Handler(BaseHTTPRequestHandler):
                 },
             )
         if u.path.startswith("/api/"):
-            allowed, retry = LIMITER.allow(self.client_address[0])
+            allowed, retry = LIMITER.allow(_client_ip(self))
             if not allowed:
                 return _json(self, {"error": "rate limit exceeded"}, 429, {"Retry-After": str(retry)})
         if u.path == "/api/generate":
@@ -404,7 +432,13 @@ class Handler(BaseHTTPRequestHandler):
             return _json(self, result, 503 if "error" in result else 200)
         if u.path == "/api/check":
             online = q.get("online", ["0"])[0].lower() in ("1", "true", "on", "yes")
-            result = _check(q.get("imei", [""])[0], online)
+            if online and not ONLINE_SLOTS.acquire(blocking=False):
+                return _json(self, {"error": "online checks are busy, retry shortly"}, 503, {"Retry-After": "5"})
+            try:
+                result = _check(q.get("imei", [""])[0], online)
+            finally:
+                if online:
+                    ONLINE_SLOTS.release()
             return _json(self, result, 400 if "error" in result else 200)
         _json(self, {"error": "not found"}, 404)
 

@@ -12,9 +12,11 @@ Online (optional):
 The TAC -> model data comes from the MoazEb open TAC database
 (https://github.com/MoazEb/tac-database, MIT), downloaded on first use.
 
-NOTE: generated IMEIs are structurally valid but correspond to no real
-handset. They do not encode eSIM or SIM-lock status; those live in
-carrier/device records and cannot be derived from an IMEI.
+NOTE: generated IMEIs pass the Luhn checksum and carry a real TAC, but no
+manufacturer or carrier has assigned them. Their serials are random, so a
+number can rarely coincide with a real device. They do not encode eSIM or
+SIM-lock status; those live in carrier/device records and cannot be derived
+from an IMEI.
 """
 from __future__ import annotations
 
@@ -29,7 +31,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 DB_URL = "https://raw.githubusercontent.com/MoazEb/tac-database/main/tac_full.csv"
 CACHE_DIR = Path(
@@ -123,9 +125,9 @@ def _titles_text(html: str) -> str:
     return re.sub(r"\s+", " ", txt)
 
 
-def check_imeiproof(imei: str) -> dict:
+def check_imeiproof(imei: str, timeout: int = 25) -> dict:
     try:
-        html = _get(f"https://imeiproof.com/imei/{imei}")
+        html = _get(f"https://imeiproof.com/imei/{imei}", timeout=timeout)
     except Exception as e:  # noqa: BLE001
         return {"source": "imeiproof", "error": str(e)}
     title = re.search(r"<title>([^<]*)", html, re.I)
@@ -144,9 +146,9 @@ def check_imeiproof(imei: str) -> dict:
     }
 
 
-def check_imei_org(imei: str) -> dict:
+def check_imei_org(imei: str, timeout: int = 25) -> dict:
     try:
-        text = _titles_text(_get(f"https://imei.org/check-imei/{imei}"))
+        text = _titles_text(_get(f"https://imei.org/check-imei/{imei}", timeout=timeout))
     except urllib.error.HTTPError as e:
         if e.code == 404:
             return {"source": "imei.org", "status": "NOT FOUND"}

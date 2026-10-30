@@ -13,3 +13,5 @@ services:
         value: "13"
       - key: RATE_LIMIT
         value: "120"
+      - key: TRUST_PROXY
+        value: "1"
