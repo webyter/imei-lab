@@ -1,8 +1,13 @@
+import contextlib
+import io
 import json
+import os
 import threading
 import unittest
 import urllib.error
 import urllib.request
+from pathlib import Path
+from unittest import mock
 
 import imei_lab as t
 import imei_server as s
@@ -51,6 +56,13 @@ class ServerTests(unittest.TestCase):
         self.assertIn("Content-Security-Policy", headers)
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
 
+    def test_index_is_responsive(self):
+        _, _, body = get(self.port, "/")
+        self.assertIn(b'name="viewport" content="width=device-width', body)
+        self.assertIn(b"max-width:480px", body)
+        self.assertIn(b"min-height:100dvh", body)
+        self.assertIn(b"@media (max-height:560px)", body)
+
     def test_health(self):
         code, _, body = get(self.port, "/health")
         data = json.loads(body)
@@ -89,6 +101,28 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(code, 400)
         self.assertIn("error", json.loads(body))
 
+    def test_generate_empty_pool_is_503(self):
+        old = s.IPHONE_TACS
+        s.IPHONE_TACS = []
+        try:
+            code, _, body = get(self.port, "/api/generate")
+        finally:
+            s.IPHONE_TACS = old
+        self.assertEqual(code, 503)
+        self.assertIn("error", json.loads(body))
+
+    def test_check_online_uses_sources(self):
+        proof = {"source": "imeiproof", "model": "Apple iPhone 13", "checksum": "Checksum Passed", "found": True}
+        org = {"source": "imei.org", "status": "found", "model": "iPhone 13"}
+        with (
+            mock.patch.object(s.t, "check_imeiproof", return_value=proof),
+            mock.patch.object(s.t, "check_imei_org", return_value=org),
+        ):
+            code, _, body = get(self.port, f"/api/check?imei={self.imei}&online=1")
+        data = json.loads(body)
+        self.assertEqual(code, 200)
+        self.assertEqual([r["source"] for r in data["online"]], ["imeiproof", "imei.org"])
+
     def test_not_found(self):
         code, _, _ = get(self.port, "/nope")
         self.assertEqual(code, 404)
@@ -101,6 +135,139 @@ class ServerTests(unittest.TestCase):
             self.assertEqual(codes, [200, 200, 429])
         finally:
             s.LIMITER = old
+
+
+class EnvIntTests(unittest.TestCase):
+    def test_reads_integer(self):
+        with mock.patch.dict(os.environ, {"IMEI_TEST_INT": " 9000 "}, clear=True):
+            self.assertEqual(s._env_int("IMEI_TEST_INT", 8000), 9000)
+
+    def test_falls_back_on_garbage(self):
+        with mock.patch.dict(os.environ, {"IMEI_TEST_INT": "nine"}, clear=True):
+            self.assertEqual(s._env_int("IMEI_TEST_INT", 8000), 8000)
+
+    def test_falls_back_when_unset(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(s._env_int("IMEI_TEST_INT", 8000), 8000)
+
+
+class IPhonePoolTests(unittest.TestCase):
+    ROWS = {
+        "35729040": ("APPLE", "APPLE IPHONE 16, Apple iPhone 16, A3081, 2024"),
+        "35729041": ("APPLE", "APPLE IPHONE 13 MINI, Apple iPhone 13 mini, A2628, 2021"),
+        "35729042": ("APPLE", "APPLE IPHONE XS, Apple iPhone XS, A1920 - (US Model), 2018"),
+        "35729043": ("APPLE", "APPLE IPHONE XR, Apple iPhone XR, A1984, 2018"),
+        "35729044": ("APPLE", "APPLE IPHONE SE, Apple iPhone SE, A1662, 2016"),
+        "35332510": ("SAMSUNG", "SAMSUNG GALAXY S9"),
+    }
+    ALL_IPHONES = {"35729040", "35729041", "35729042", "35729043", "35729044"}
+
+    def setUp(self):
+        self.old_db, self.old_tacs = s.DB, s.IPHONE_TACS
+
+    def tearDown(self):
+        s.DB, s.IPHONE_TACS = self.old_db, self.old_tacs
+
+    def init_pool(self, minimum=None):
+        env = {} if minimum is None else {"IMEI_MIN_IPHONE": minimum}
+        with (
+            mock.patch.object(s.t, "load_db", return_value=self.ROWS),
+            mock.patch.object(s.t, "ensure_db", return_value=Path("unused.csv")),
+            mock.patch.dict(os.environ, env, clear=True),
+        ):
+            s.init_data()
+        return {tac for tac, _, _ in s.IPHONE_TACS}
+
+    def test_default_pool_starts_at_iphone_13(self):
+        self.assertEqual(self.init_pool(), {"35729040", "35729041"})
+
+    def test_zero_includes_pre13_and_unnumbered_models(self):
+        self.assertEqual(self.init_pool("0"), self.ALL_IPHONES)
+
+    def test_falls_back_to_whole_pool(self):
+        self.assertEqual(self.init_pool("17"), self.ALL_IPHONES)
+
+    def test_iphone_num(self):
+        self.assertEqual(s._iphone_num("APPLE IPHONE XS, Apple iPhone XS, A1920"), 0)
+        self.assertEqual(s._iphone_num("APPLE IPHONE 15 PRO MAX, Apple iPhone 15 Pro Max"), 15)
+        self.assertEqual(s._iphone_num("APPLE IPHONE AIR, Apple iPhone 16 Pro, A3516, 2025"), 16)
+        self.assertEqual(s._iphone_num("SAMSUNG GALAXY S9"), 0)
+
+
+class KeepaliveTests(unittest.TestCase):
+    def start(self, env):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True):
+            with (
+                mock.patch.object(s.threading, "Thread") as thread,
+                contextlib.redirect_stdout(out),
+            ):
+                s.start_keepalive()
+        return thread, out.getvalue()
+
+    def test_without_url_starts_nothing(self):
+        thread, _ = self.start({})
+        thread.assert_not_called()
+
+    def test_disabled_by_flag(self):
+        thread, _ = self.start({"KEEPALIVE_URL": "https://example.com", "KEEPALIVE": "0"})
+        thread.assert_not_called()
+
+    def test_pings_health_and_clamps_interval(self):
+        thread, out = self.start({"KEEPALIVE_URL": "https://example.com/", "KEEPALIVE_INTERVAL": "5"})
+        thread.assert_called_once()
+        self.assertIn("https://example.com/health", out)
+        self.assertIn("every 60s", out)
+
+
+class FakeClock:
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
+class RateLimiterTests(unittest.TestCase):
+    def test_allows_up_to_limit_then_blocks(self):
+        clock = FakeClock()
+        with mock.patch.object(s.time, "monotonic", clock):
+            limiter = s.RateLimiter(limit=2, window=60)
+            self.assertEqual(limiter.allow("1.2.3.4"), (True, 0))
+            self.assertEqual(limiter.allow("1.2.3.4"), (True, 0))
+            allowed, retry = limiter.allow("1.2.3.4")
+        self.assertFalse(allowed)
+        self.assertGreaterEqual(retry, 1)
+        self.assertLessEqual(retry, 60)
+
+    def test_window_slides(self):
+        clock = FakeClock()
+        with mock.patch.object(s.time, "monotonic", clock):
+            limiter = s.RateLimiter(limit=1, window=60)
+            self.assertTrue(limiter.allow("k")[0])
+            self.assertFalse(limiter.allow("k")[0])
+            clock.advance(61)
+            self.assertTrue(limiter.allow("k")[0])
+
+    def test_keys_are_independent(self):
+        clock = FakeClock()
+        with mock.patch.object(s.time, "monotonic", clock):
+            limiter = s.RateLimiter(limit=1, window=60)
+            self.assertTrue(limiter.allow("a")[0])
+            self.assertTrue(limiter.allow("b")[0])
+
+    def test_tracked_keys_are_bounded(self):
+        clock = FakeClock()
+        with mock.patch.object(s.time, "monotonic", clock):
+            limiter = s.RateLimiter(limit=5, window=60, max_keys=3)
+            for key in ("a", "b", "c"):
+                limiter.allow(key)
+            clock.advance(120)  # every bucket is now stale
+            limiter.allow("d")
+            self.assertEqual(list(limiter._buckets), ["d"])
 
 
 if __name__ == "__main__":

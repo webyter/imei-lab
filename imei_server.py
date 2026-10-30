@@ -27,20 +27,32 @@ import imei_lab as t
 DB: dict[str, tuple[str, str]] = {}
 IPHONE_TACS: list[tuple[str, str, str]] = []
 
+_IPHONE_GEN = re.compile(r"IPHONE\s+(\d+)")
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an integer environment variable, falling back to default when unset or malformed."""
+    try:
+        return int(os.environ.get(name, "").strip())
+    except ValueError:
+        return default
+
 
 def _iphone_num(specs: str) -> int:
-    m = re.search(r"IPHONE\s+(\d+)", specs.upper())
-    return int(m.group(1)) if m else 10**6
+    """Highest iPhone generation named in the TAC specs, 0 when there is none.
+
+    Models named without a number (XS, XR, SE, X) carry no generation, so they
+    count as 0 and stay out of a generation-filtered pool.
+    """
+    gens = [int(n) for n in _IPHONE_GEN.findall(specs.upper())]
+    return max(gens) if gens else 0
 
 
 def init_data() -> None:
     global DB, IPHONE_TACS
     DB = t.load_db(t.ensure_db())
-    try:
-        min_v = int(os.environ.get("IMEI_MIN_IPHONE", "13"))
-    except ValueError:
-        min_v = 13
-    all_iphones = [(tac, b, s) for tac, (b, s) in DB.items() if b == "APPLE" and "IPHONE" in s.upper()]
+    min_v = _env_int("IMEI_MIN_IPHONE", 13)
+    all_iphones = [(tac, b, s) for tac, (b, s) in DB.items() if b.upper() == "APPLE" and "IPHONE" in s.upper()]
     IPHONE_TACS = [x for x in all_iphones if _iphone_num(x[2]) >= min_v]
     if not IPHONE_TACS:  # never end up with an empty pool
         IPHONE_TACS = all_iphones
@@ -58,20 +70,22 @@ PAGE = r"""<!doctype html>
     --acc1:#5b8cff; --acc2:#8b5cf6; --ok:#34d399;
   }
   *{box-sizing:border-box;}
-  html,body{height:100%;}
+  html{-webkit-text-size-adjust:100%;}
   body{
-    margin:0; display:grid; place-items:center;
+    margin:0; min-height:100vh; min-height:100dvh;
+    display:flex; flex-direction:column;
     font:16px/1.55 ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
     color:var(--fg); background:#0b0d12;
     background-image:
       radial-gradient(60rem 40rem at 15% -10%, rgba(91,140,255,.18), transparent 60%),
       radial-gradient(50rem 40rem at 110% 110%, rgba(139,92,246,.20), transparent 55%),
       radial-gradient(40rem 30rem at 50% 120%, rgba(52,211,153,.08), transparent 60%);
-    padding:24px;
+    padding:clamp(10px,4vw,24px);
   }
   .app{
-    width:min(480px,100%); position:relative; padding:34px 32px 26px;
-    border-radius:26px; text-align:center;
+    width:100%; max-width:480px; margin:auto; position:relative;
+    padding:clamp(20px,6vw,34px) clamp(16px,5.5vw,32px) clamp(16px,4.5vw,26px);
+    border-radius:clamp(18px,6vw,26px); text-align:center;
     background:linear-gradient(180deg,rgba(255,255,255,.07),rgba(255,255,255,.025));
     border:1px solid var(--line);
     box-shadow:0 30px 80px -30px rgba(0,0,0,.8), inset 0 1px 0 rgba(255,255,255,.06);
@@ -81,10 +95,11 @@ PAGE = r"""<!doctype html>
   .brand{display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:4px;}
   .brand svg{width:26px; height:26px; filter:drop-shadow(0 2px 8px rgba(91,140,255,.5));}
   .brand h1{font-size:16px; font-weight:650; letter-spacing:.3px; margin:0;}
-  .tag{font-size:12px; color:var(--mut); margin:0 0 26px;}
+  .tag{font-size:12px; color:var(--mut); margin:0 0 clamp(14px,5vw,26px);}
 
   .screen{
-    position:relative; padding:26px 18px 22px; border-radius:18px;
+    position:relative; padding:clamp(16px,5vw,26px) clamp(10px,4vw,18px) clamp(14px,4vw,22px);
+    border-radius:clamp(14px,4vw,18px);
     background:rgba(0,0,0,.28); border:1px solid var(--line);
     box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
     overflow:hidden;
@@ -99,8 +114,8 @@ PAGE = r"""<!doctype html>
 
   .imei{
     font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
-    font-size:clamp(20px,6vw,29px); font-weight:600; letter-spacing:.12em;
-    line-height:1.25; word-break:break-word; min-height:1.4em;
+    font-size:min(5.6vw,30px); font-weight:600; letter-spacing:.05em;
+    line-height:1.3; white-space:nowrap; min-height:1.3em;
     background:linear-gradient(180deg,#fff,#c9d3ea);
     -webkit-background-clip:text; background-clip:text; color:transparent;
     text-shadow:0 0 30px rgba(120,160,255,.15);
@@ -116,10 +131,11 @@ PAGE = r"""<!doctype html>
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
 
-  .btns{display:flex; gap:12px; margin-top:26px;}
+  .btns{display:flex; gap:clamp(8px,2.5vw,12px); margin-top:clamp(14px,5vw,26px);}
   button{
-    flex:1; display:inline-flex; align-items:center; justify-content:center; gap:8px;
-    padding:14px 16px; border-radius:13px; font:inherit; font-weight:600; cursor:pointer;
+    flex:1; min-width:0; display:inline-flex; align-items:center; justify-content:center; gap:8px;
+    padding:clamp(11px,3vw,14px) clamp(8px,3vw,16px); border-radius:clamp(11px,3.5vw,13px);
+    font:inherit; font-weight:600; cursor:pointer; white-space:nowrap;
     border:1px solid transparent; transition:transform .08s ease, box-shadow .2s, background .2s, opacity .2s;
   }
   button:active{transform:translateY(1px) scale(.995);}
@@ -137,9 +153,28 @@ PAGE = r"""<!doctype html>
     background:var(--ok); box-shadow:0 10px 26px -12px rgba(52,211,153,.8);}
   button:disabled{opacity:.6; cursor:default;}
 
-  .foot{color:var(--mut); font-size:11px; margin:20px 0 0; letter-spacing:.2px;}
+  .foot{color:var(--mut); font-size:11px; margin:clamp(12px,4vw,20px) 0 0; letter-spacing:.2px;}
   .dot{display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--ok);
     margin-right:6px; vertical-align:middle; box-shadow:0 0 8px var(--ok);}
+
+  /* Narrow phones: keep both buttons on one row. */
+  @media (max-width:340px){
+    button{font-size:14px; gap:6px;}
+    button svg{width:16px; height:16px;}
+    .brand h1{font-size:15px;}
+  }
+
+  /* Short screens (landscape phones, small windows): pack the card tighter. */
+  @media (max-height:560px){
+    body{padding:10px;}
+    .app{padding:16px 18px 12px; border-radius:16px;}
+    .brand{margin-bottom:2px;}
+    .brand svg{width:22px; height:22px;}
+    .tag{margin-bottom:10px;}
+    .screen{padding:12px 10px 10px;}
+    .btns{margin-top:10px;}
+    .foot{margin-top:8px;}
+  }
 </style>
 </head>
 <body>
@@ -224,7 +259,7 @@ CSP = (
 
 
 class RateLimiter:
-    """Fixed-window per-key limiter that also bounds memory."""
+    """Sliding-window per-key limiter that also bounds memory."""
 
     def __init__(self, limit: int = 120, window: float = 60.0, max_keys: int = 10_000) -> None:
         self.limit = limit
@@ -252,11 +287,7 @@ class RateLimiter:
             return True, 0
 
 
-try:
-    _RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "120"))
-except ValueError:
-    _RATE_LIMIT = 120
-LIMITER = RateLimiter(limit=_RATE_LIMIT)
+LIMITER = RateLimiter(limit=_env_int("RATE_LIMIT", 120))
 
 
 def _send(
@@ -358,7 +389,8 @@ class Handler(BaseHTTPRequestHandler):
                 return _json(self, {"error": "count must be an integer"}, 400)
             if not 1 <= count <= 50:
                 return _json(self, {"error": "count must be between 1 and 50"}, 400)
-            return _json(self, _generate(count))
+            result = _generate(count)
+            return _json(self, result, 503 if "error" in result else 200)
         if u.path == "/api/check":
             online = q.get("online", ["0"])[0].lower() in ("1", "true", "on", "yes")
             result = _check(q.get("imei", [""])[0], online)
@@ -399,8 +431,8 @@ def start_keepalive() -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(prog="imei_server", description="IMEI Lab generator web app")
     ap.add_argument("--version", action="version", version=f"%(prog)s {t.__version__}")
-    ap.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
-    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
+    ap.add_argument("--host", default=os.environ.get("HOST") or "127.0.0.1")
+    ap.add_argument("--port", type=int, default=_env_int("PORT", 8000))
     args = ap.parse_args()
     init_data()
     srv = ThreadingHTTPServer((args.host, args.port), Handler)

@@ -191,7 +191,7 @@ def cmd_generate(args) -> int:
     matches = [
         (tac, b, s)
         for tac, (b, s) in db.items()
-        if (brand is None or b == brand)
+        if (brand is None or b.upper() == brand)
         and (model is None or model in s.lower())
     ]
     if not matches:
@@ -247,7 +247,7 @@ def cmd_check(args) -> int:
     hit = db.get(imei[:8])
     print(f"DB model  : {_fmt(*hit) if hit else '(TAC not in database)'}")
 
-    if hit and args.brand and args.brand.upper() not in hit[0]:
+    if hit and args.brand and args.brand.upper() not in hit[0].upper():
         print(f"warning   : expected brand {args.brand!r}, DB says {hit[0]!r}")
 
     if args.online:
@@ -281,7 +281,7 @@ def main(argv=None) -> int:
 
     g = sub.add_parser("generate", help="generate Luhn-valid IMEIs")
     g.add_argument("--model", help="filter by model substring, e.g. 'iPhone 14'")
-    g.add_argument("--brand", help="filter by brand, e.g. Apple")
+    g.add_argument("--brand", help="filter by brand, case-insensitive, e.g. Apple")
     g.add_argument("-n", "--count", type=int, default=1)
     g.add_argument("--seed", type=int, help="deterministic output")
     g.add_argument("--json", action="store_true")
