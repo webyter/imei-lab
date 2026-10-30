@@ -32,7 +32,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-__version__ = "1.4.2"
+__version__ = "1.4.3"
 
 DB_URL = "https://raw.githubusercontent.com/MoazEb/tac-database/main/tac_full.csv"
 MIN_DB_TACS = 200_000
@@ -122,8 +122,18 @@ def load_db(path: Path = DB_PATH) -> dict[str, tuple[str, str]]:
     return db
 
 
+def _model(brand: str, specs: str) -> str:
+    """The specs text with a redundant leading brand name removed."""
+    text = specs.strip()
+    name = brand.strip()
+    if name and text.upper().startswith(f"{name.upper()} "):
+        return text[len(name) + 1 :].strip()
+    return text
+
+
 def _fmt(brand: str, specs: str) -> str:
-    return f"{brand} - {specs}" if specs else brand
+    model = _model(brand, specs)
+    return f"{brand} - {model}" if model else brand
 
 
 # ---------------------------------------------------------------- online

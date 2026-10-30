@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.4.3
+
+- Model names drop a redundant leading brand, so the app shows
+  `IPHONE 13 PRO MAX` instead of `APPLE IPHONE 13 PRO MAX`.
+
 ## 1.4.2
 
 - A full rate-limit key table now evicts the least recently used key instead of

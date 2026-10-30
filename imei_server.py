@@ -605,7 +605,8 @@ def _generate(count: int) -> dict:
         tac, brand, specs = random.choice(IPHONE_TACS)
         serial = f"{random.randint(0, 999_999):06d}"
         base = tac + serial
-        items.append({"imei": base + str(t.check_digit(base)), "tac": tac, "brand": brand, "specs": specs})
+        model = t._model(brand, specs)
+        items.append({"imei": base + str(t.check_digit(base)), "tac": tac, "brand": brand, "specs": model})
     return {"items": items}
 
 

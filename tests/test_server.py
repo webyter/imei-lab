@@ -164,6 +164,12 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(len(json.loads(body)["items"]), 5)
 
+    def test_generate_reports_model_without_brand_prefix(self):
+        _, _, body = get(self.port, "/api/generate")
+        specs = json.loads(body)["items"][0]["specs"]
+        self.assertTrue(specs.startswith("IPHONE 13"), specs)
+        self.assertFalse(specs.startswith("APPLE"), specs)
+
     def test_generate_rejects_bad_count(self):
         for path in ("/api/generate?count=0", "/api/generate?count=51", "/api/generate?count=abc"):
             code, _, _ = get(self.port, path)

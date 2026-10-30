@@ -72,6 +72,15 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(t._fmt("APPLE", "iPhone 13"), "APPLE - iPhone 13")
         self.assertEqual(t._fmt("APPLE", ""), "APPLE")
 
+    def test_model_drops_duplicate_brand(self):
+        self.assertEqual(t._fmt("APPLE", "APPLE IPHONE 13"), "APPLE - IPHONE 13")
+        self.assertEqual(
+            t._model("APPLE", "APPLE IPHONE 13 PRO MAX, Apple iPhone 13 Pro Max"),
+            "IPHONE 13 PRO MAX, Apple iPhone 13 Pro Max",
+        )
+        self.assertEqual(t._model("APPLE", "IPHONE 13"), "IPHONE 13")
+        self.assertEqual(t._model("", "APPLE IPHONE 13"), "APPLE IPHONE 13")
+
 
 class OnlineCheckTests(unittest.TestCase):
     def test_imeiproof_found(self):
