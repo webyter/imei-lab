@@ -29,6 +29,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+__version__ = "1.0.0"
+
 DB_URL = "https://raw.githubusercontent.com/MoazEb/tac-database/main/tac_full.csv"
 CACHE_DIR = Path(
     os.environ.get("IMEI_LAB_CACHE")
@@ -274,6 +276,7 @@ def main(argv=None) -> int:
         epilog="Generated IMEIs are structurally valid but not real devices; "
         "eSIM/SIM-lock status cannot be derived from an IMEI.",
     )
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     g = sub.add_parser("generate", help="generate Luhn-valid IMEIs")

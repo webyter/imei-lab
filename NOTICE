@@ -1,0 +1,14 @@
+Third-party data
+================
+
+data/tac_full.csv is derived from the MoazEb open TAC database:
+
+  https://github.com/MoazEb/tac-database
+
+That project is licensed under the MIT License. Its copyright notice applies
+to the TAC dataset:
+
+  Copyright (c) MoazEb and contributors
+
+The dataset is included unmodified. The application code in this repository is
+separately licensed under the MIT License (see LICENSE).

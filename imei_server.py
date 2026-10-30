@@ -212,10 +212,68 @@ generate();
 """
 
 
-def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str, code: int = 200) -> None:
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "X-Frame-Options": "DENY",
+}
+CSP = (
+    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+    "script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+)
+
+
+class RateLimiter:
+    """Fixed-window per-key limiter that also bounds memory."""
+
+    def __init__(self, limit: int = 120, window: float = 60.0, max_keys: int = 10_000) -> None:
+        self.limit = limit
+        self.window = window
+        self.max_keys = max_keys
+        self._buckets: dict[str, list[float]] = {}
+        self._lock = threading.Lock()
+
+    def allow(self, key: str) -> tuple[bool, int]:
+        now = time.monotonic()
+        with self._lock:
+            if len(self._buckets) >= self.max_keys:
+                cutoff = now - self.window
+                for k in [k for k, v in self._buckets.items() if not v or v[-1] <= cutoff]:
+                    del self._buckets[k]
+                if len(self._buckets) >= self.max_keys:
+                    self._buckets.clear()
+            bucket = self._buckets.setdefault(key, [])
+            cutoff = now - self.window
+            while bucket and bucket[0] <= cutoff:
+                bucket.pop(0)
+            if len(bucket) >= self.limit:
+                return False, max(1, int(self.window - (now - bucket[0])))
+            bucket.append(now)
+            return True, 0
+
+
+try:
+    _RATE_LIMIT = int(os.environ.get("RATE_LIMIT", "120"))
+except ValueError:
+    _RATE_LIMIT = 120
+LIMITER = RateLimiter(limit=_RATE_LIMIT)
+
+
+def _send(
+    handler: BaseHTTPRequestHandler,
+    body: bytes,
+    content_type: str,
+    code: int = 200,
+    headers: dict[str, str] | None = None,
+) -> None:
     handler.send_response(code)
     handler.send_header("Content-Type", content_type)
     handler.send_header("Content-Length", str(len(body)))
+    handler.send_header("Cache-Control", "no-store")
+    for k, v in SECURITY_HEADERS.items():
+        handler.send_header(k, v)
+    for k, v in (headers or {}).items():
+        handler.send_header(k, v)
     handler.end_headers()
     try:
         handler.wfile.write(body)
@@ -223,12 +281,17 @@ def _send(handler: BaseHTTPRequestHandler, body: bytes, content_type: str, code:
         pass
 
 
-def _json(handler: BaseHTTPRequestHandler, obj: dict, code: int = 200) -> None:
-    _send(handler, json.dumps(obj).encode(), "application/json", code)
+def _json(
+    handler: BaseHTTPRequestHandler,
+    obj: dict,
+    code: int = 200,
+    headers: dict[str, str] | None = None,
+) -> None:
+    _send(handler, json.dumps(obj).encode(), "application/json", code, headers)
 
 
 def _html(handler: BaseHTTPRequestHandler, text: str) -> None:
-    _send(handler, text.encode(), "text/html; charset=utf-8")
+    _send(handler, text.encode(), "text/html; charset=utf-8", headers={"Content-Security-Policy": CSP})
 
 
 def _generate(count: int) -> dict:
@@ -274,16 +337,32 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         if u.path == "/health":
-            return _json(self, {"status": "ok", "tacs": len(DB)})
+            return _json(
+                self,
+                {
+                    "status": "ok",
+                    "tacs": len(DB),
+                    "iphones": len(IPHONE_TACS),
+                    "version": t.__version__,
+                },
+            )
+        if u.path.startswith("/api/"):
+            allowed, retry = LIMITER.allow(self.client_address[0])
+            if not allowed:
+                return _json(self, {"error": "rate limit exceeded"}, 429, {"Retry-After": str(retry)})
         if u.path == "/api/generate":
+            raw = q.get("count", ["1"])[0]
             try:
-                count = int(q.get("count", ["1"])[0])
+                count = int(raw)
             except ValueError:
-                count = 1
+                return _json(self, {"error": "count must be an integer"}, 400)
+            if not 1 <= count <= 50:
+                return _json(self, {"error": "count must be between 1 and 50"}, 400)
             return _json(self, _generate(count))
         if u.path == "/api/check":
-            online = q.get("online", ["0"])[0] in ("1", "true", "on")
-            return _json(self, _check(q.get("imei", [""])[0], online))
+            online = q.get("online", ["0"])[0].lower() in ("1", "true", "on", "yes")
+            result = _check(q.get("imei", [""])[0], online)
+            return _json(self, result, 400 if "error" in result else 200)
         _json(self, {"error": "not found"}, 404)
 
 
@@ -318,18 +397,25 @@ def start_keepalive() -> None:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Minimal IMEI generator web app")
+    ap = argparse.ArgumentParser(prog="imei_server", description="IMEI Lab generator web app")
+    ap.add_argument("--version", action="version", version=f"%(prog)s {t.__version__}")
     ap.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"))
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     args = ap.parse_args()
     init_data()
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
+    srv.daemon_threads = True
     start_keepalive()
-    print(f"IMEI Lab running at http://{args.host}:{args.port}  (Ctrl+C to stop)", flush=True)
+    print(
+        f"IMEI Lab v{t.__version__} running at http://{args.host}:{args.port}  (Ctrl+C to stop)",
+        flush=True,
+    )
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nbye")
+    finally:
+        srv.server_close()
     return 0
 
 
