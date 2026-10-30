@@ -10,8 +10,8 @@ Python with a tiny web UI and a CLI.
 - Generates **Luhn-valid** IMEIs from real TACs (default: modern iPhones).
 - Validates any IMEI's check digit and identifies the TAC/model offline.
 - Optionally checks an IMEI online against imeiproof.com and imei.org.
-- Ships a single-page web app with generate/copy, health checks and a
-  self-pinger for free-tier hosting.
+- Ships a single-page web app with generate/copy, batch output, an offline
+  checker, health checks and a self-pinger for free-tier hosting.
 
 > Generated IMEIs pass the Luhn checksum and carry a real TAC, but no
 > manufacturer or carrier has assigned them. Serials are random, so a generated
@@ -36,6 +36,7 @@ cd imei-lab
 ./imei_lab.py generate --model "iPhone 15" -n 3
 ./imei_lab.py check 358426431038400 --online
 ./imei_lab.py lookup 35842643
+python3 refresh_db.py          # refresh the bundled TAC data
 
 ./run.sh            # web UI at http://127.0.0.1:8000
 ./run.sh 9000       # custom port
@@ -56,6 +57,9 @@ The `--brand` and `--model` filters are case-insensitive.
 | `GET /health` | `{status, tacs, iphones, version}` |
 | `GET /api/generate?count=1..50` | Generate IMEIs |
 | `GET /api/check?imei=<15 digits>&online=1` | Validate/look up |
+| `GET /manifest.webmanifest` | Web app manifest |
+| `GET /sw.js` | Service worker (network-first cache) |
+| `GET /icon-192.png`, `/icon-512.png` | App icons |
 
 Endpoints return `400` for invalid input, `429` when rate limited and `503`
 when the iPhone pool is empty. `/api/check?...&online=1` makes live requests to
@@ -85,6 +89,25 @@ Legacy `IMEI_TOOL_DB` / `IMEI_TOOL_CACHE` are still honoured.
 python3 -m unittest discover -s tests -v
 ruff check .
 ```
+
+## Data freshness
+
+`data/tac_full.csv` is a snapshot. To bring it up to date from upstream:
+
+```bash
+python3 refresh_db.py            # download, verify and replace it
+python3 refresh_db.py --dry-run  # report only
+```
+
+It downloads to a temporary file, checks that it looks like a TAC database (at
+least 200k rows, and loadable), and only then replaces the bundled csv, so a
+failed run leaves the current copy untouched. Commit the result.
+
+## Install
+
+Open the site on a phone and use "Add to Home Screen": the page ships a web app
+manifest, icons and a service worker, so it opens standalone and still loads
+when the network is down.
 
 ## Deploy
 

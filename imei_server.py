@@ -12,12 +12,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import random
 import re
+import struct
 import threading
 import time
 import urllib.request
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -85,6 +88,11 @@ PAGE = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#0b0d12">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="IMEI Lab">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
 <title>IMEI Lab</title>
 <style>
   :root{
@@ -117,7 +125,9 @@ PAGE = r"""<!doctype html>
   .brand{display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:4px;}
   .brand svg{width:26px; height:26px; filter:drop-shadow(0 2px 8px rgba(91,140,255,.5));}
   .brand h1{font-size:16px; font-weight:650; letter-spacing:.3px; margin:0;}
-  .tag{font-size:12px; color:var(--mut); margin:0 0 clamp(14px,5vw,26px);}
+  .head{display:flex; align-items:center; justify-content:center; gap:10px;
+    margin:0 0 clamp(12px,4vw,22px);}
+  .tag{font-size:12px; color:var(--mut); margin:0;}
 
   .screen{
     position:relative; padding:clamp(16px,5vw,26px) clamp(10px,4vw,18px) clamp(14px,4vw,22px);
@@ -179,6 +189,41 @@ PAGE = r"""<!doctype html>
   .dot{display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--ok);
     margin-right:6px; vertical-align:middle; box-shadow:0 0 8px var(--ok);}
 
+  .count{
+    font:inherit; font-size:12px; color:var(--mut); cursor:pointer;
+    background:rgba(255,255,255,.05); border:1px solid var(--line);
+    border-radius:999px; padding:2px 4px 2px 8px;
+  }
+  .count:focus-visible{outline:2px solid var(--acc1); outline-offset:2px;}
+
+  .batch{list-style:none; display:flex; flex-wrap:wrap; gap:6px; justify-content:center;
+    margin:12px 0 0; padding:0;}
+  .batch[hidden]{display:none;}
+  .batch li{
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-size:12px;
+    padding:5px 9px; border-radius:8px; cursor:pointer; color:var(--fg);
+    background:rgba(255,255,255,.045); border:1px solid var(--line);
+  }
+  .batch li.copied{color:#06251b; background:var(--ok); border-color:var(--ok);}
+
+  .check{display:flex; gap:8px; margin-top:clamp(12px,4vw,18px);}
+  .field{
+    flex:1; min-width:0; font:inherit; font-size:16px; color:var(--fg);
+    background:rgba(0,0,0,.28); border:1px solid var(--line); border-radius:11px;
+    padding:10px 12px;
+  }
+  .field::placeholder{color:var(--mut);}
+  .field:focus{outline:none; border-color:rgba(91,140,255,.6);}
+  .ghost{
+    flex:0 0 auto; padding:10px 16px; border-radius:11px; font-size:14px;
+    color:var(--fg); background:rgba(255,255,255,.06); border-color:var(--line);
+  }
+  .ghost:hover{background:rgba(255,255,255,.1);}
+  .result{margin:10px 0 0; font-size:12px; color:var(--mut); min-height:1.2em;
+    overflow-wrap:anywhere;}
+  .result.good{color:var(--ok);}
+  .result.bad{color:#fca5a5;}
+
   /* Narrow phones: keep both buttons on one row. */
   @media (max-width:340px){
     button{font-size:14px; gap:6px;}
@@ -209,12 +254,22 @@ PAGE = r"""<!doctype html>
       </svg>
       <h1>IMEI Lab</h1>
     </div>
-    <p class="tag">Generate a valid iPhone IMEI — instant.</p>
+    <div class="head">
+      <p class="tag">Generate a valid iPhone IMEI</p>
+      <select id="count" class="count" aria-label="How many IMEIs">
+        <option value="1">1</option>
+        <option value="5">5</option>
+        <option value="10">10</option>
+        <option value="25">25</option>
+      </select>
+    </div>
 
     <section class="screen" id="screen">
       <div class="imei" id="imei">…</div>
       <div class="meta" id="meta">loading…</div>
     </section>
+
+    <ul class="batch" id="batch" hidden></ul>
 
     <div class="btns">
       <button id="gen" class="primary">
@@ -226,6 +281,13 @@ PAGE = r"""<!doctype html>
         Copy
       </button>
     </div>
+
+    <form class="check" id="checkForm" autocomplete="off">
+      <input id="checkIn" class="field" inputmode="numeric" maxlength="19" placeholder="Check an IMEI"
+        aria-label="An IMEI to check" spellcheck="false">
+      <button class="ghost" type="submit">Check</button>
+    </form>
+    <p class="result" id="result">Paste an IMEI to validate it offline.</p>
 
     <p class="foot"><span class="dot"></span>Valid Luhn · real TAC · may match a real device</p>
   </main>
@@ -244,40 +306,168 @@ window.addEventListener('wheel', e => { if (e.ctrlKey) e.preventDefault(); }, { 
 
 const $ = s => document.querySelector(s);
 let current = "";
+
 const fmt = d => d.length === 15 ? `${d.slice(0,2)} ${d.slice(2,8)} ${d.slice(8,14)} ${d.slice(14)}` : d;
-const esc = s => String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+async function copyText(text, el){
+  try{ await navigator.clipboard.writeText(text); }
+  catch{ const ta=document.createElement('textarea'); ta.value=text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
+  if(el){ el.classList.add('copied'); setTimeout(()=>el.classList.remove('copied'), 900); }
+}
+
+function showCopy(copied){
+  const c = $('#copy');
+  c.classList.toggle('copied', copied);
+  c.lastChild.textContent = copied ? " Copied" : " Copy";
+}
 
 async function generate(){
-  const screen = $('#screen'), imeiEl = $('#imei'), metaEl = $('#meta');
+  const screen = $('#screen'), imeiEl = $('#imei'), metaEl = $('#meta'), list = $('#batch');
+  const count = Number($('#count').value) || 1;
   screen.classList.remove('loading'); void screen.offsetWidth; screen.classList.add('loading');
   metaEl.textContent = "generating…";
   try{
-    const r = await fetch('/api/generate?count=1');
+    const r = await fetch(`/api/generate?count=${count}`);
     const d = await r.json();
     if(d.error){ metaEl.textContent = d.error; return; }
-    const i = d.items[0];
-    current = i.imei;
-    imeiEl.textContent = fmt(i.imei);
+    const items = d.items;
+    current = items.map(i => i.imei).join("\n");
+    imeiEl.textContent = fmt(items[0].imei);
     imeiEl.classList.remove('pop'); void imeiEl.offsetWidth; imeiEl.classList.add('pop');
-    metaEl.textContent = i.specs.replace(/,\s*/g, ' · ');
-    const c = $('#copy'); c.classList.remove('copied'); c.lastChild.textContent = " Copy";
+    metaEl.textContent = items[0].specs.replace(/,\s*/g, ' · ');
+    list.textContent = "";
+    items.slice(1).forEach(i => {
+      const li = document.createElement('li');
+      li.textContent = fmt(i.imei);
+      li.title = i.specs;
+      li.addEventListener('click', () => copyText(i.imei, li));
+      list.appendChild(li);
+    });
+    list.hidden = list.children.length === 0;
+    showCopy(false);
   }catch(e){ metaEl.textContent = "error: " + e; }
 }
 
 $('#gen').onclick = generate;
 $('#copy').onclick = async () => {
   if(!current) return;
-  try{ await navigator.clipboard.writeText(current); }
-  catch{ const ta=document.createElement('textarea'); ta.value=current; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); }
-  const c = $('#copy'); c.classList.add('copied'); c.lastChild.textContent = " Copied";
-  setTimeout(()=>{ c.classList.remove('copied'); c.lastChild.textContent = " Copy"; }, 1300);
+  await copyText(current, null);
+  showCopy(true);
+  setTimeout(()=>showCopy(false), 1300);
 };
+
+$('#checkForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const out = $('#result');
+  const imei = $('#checkIn').value.replace(/\D/g, "");
+  if(imei.length !== 15){ out.className = "result bad"; out.textContent = "An IMEI is 15 digits."; return; }
+  out.className = "result"; out.textContent = "checking…";
+  try{
+    const d = await (await fetch(`/api/check?imei=${imei}`)).json();
+    if(d.error){ out.className = "result bad"; out.textContent = d.error; return; }
+    out.className = "result " + (d.luhn ? "good" : "bad");
+    out.textContent = `${d.luhn ? "Valid" : "Bad check digit"} · ${d.db_model}`;
+  }catch(err){ out.className = "result bad"; out.textContent = "error: " + err; }
+};
+
+if('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(()=>{});
 
 generate();
 </script>
 </body>
 </html>
 """
+
+
+MANIFEST = {
+    "name": "IMEI Lab",
+    "short_name": "IMEI Lab",
+    "description": "Generate and check Luhn-valid IMEIs from the open TAC database.",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "background_color": "#0b0d12",
+    "theme_color": "#0b0d12",
+    "icons": [
+        {"src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+        {"src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"},
+    ],
+}
+
+SERVICE_WORKER = """\
+const CACHE = 'imei-lab-1';
+
+self.addEventListener('install', e => {
+  e.waitUntil(caches.open(CACHE).then(c => c.add('/')));
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+  );
+  self.clients.claim();
+});
+
+// Network first: the page stays fresh online and still opens offline.
+self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+  if (e.request.method !== 'GET' || url.origin !== location.origin) return;
+  if (url.pathname.startsWith('/api/') || url.pathname === '/health') return;
+  e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+});
+"""
+
+ICON_SIZES = {"/icon-192.png": 192, "/icon-512.png": 512}
+_ICONS: dict[int, bytes] = {}
+
+
+def _png_chunk(tag: bytes, data: bytes) -> bytes:
+    crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+
+def make_icon(size: int) -> bytes:
+    """Render the app icon: a rounded gradient tile on the page background, as a PNG."""
+    bg = (0x0B, 0x0D, 0x12)
+    top = (0x5B, 0x8C, 0xFF)
+    bottom = (0x8B, 0x5C, 0xF6)
+    inset = size * 0.16
+    edge = size - 2 * inset
+    radius = edge * 0.26
+    centre = inset + edge / 2
+    half = edge / 2
+    stride = size * 4 + 1
+    pixels = bytearray(stride * size)
+    for y in range(size):
+        row = y * stride
+        along = min(1.0, max(0.0, (y - inset) / edge))
+        fill = tuple(int(top[i] + (bottom[i] - top[i]) * along) for i in range(3))
+        for x in range(size):
+            dx = abs(x + 0.5 - centre) - (half - radius)
+            dy = abs(y + 0.5 - centre) - (half - radius)
+            spread = math.hypot(max(dx, 0.0), max(dy, 0.0)) + min(max(dx, dy), 0.0) - radius
+            alpha = min(1.0, max(0.0, 0.5 - spread))
+            at = row + 1 + x * 4
+            if alpha <= 0:
+                pixels[at : at + 3] = bytes(bg)
+            else:
+                pixels[at : at + 3] = bytes(int(bg[i] + (fill[i] - bg[i]) * alpha) for i in range(3))
+            pixels[at + 3] = 0xFF
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(bytes(pixels), 9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def icon(size: int) -> bytes:
+    """Cached PNG bytes for one icon size."""
+    if size not in _ICONS:
+        _ICONS[size] = make_icon(size)
+    return _ICONS[size]
 
 
 SECURITY_HEADERS = {
@@ -406,6 +596,12 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(204)
             self.end_headers()
             return
+        if u.path == "/manifest.webmanifest":
+            return _send(self, json.dumps(MANIFEST).encode(), "application/manifest+json")
+        if u.path == "/sw.js":
+            return _send(self, SERVICE_WORKER.encode(), "application/javascript; charset=utf-8")
+        if u.path in ICON_SIZES:
+            return _send(self, icon(ICON_SIZES[u.path]), "image/png")
         if u.path == "/health":
             return _json(
                 self,

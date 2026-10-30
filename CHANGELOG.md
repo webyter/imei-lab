@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+- `refresh_db.py` updates the bundled TAC data, verifying the download before
+  replacing the file.
+- The web UI generates 1, 5, 10 or 25 IMEIs at once and can check an IMEI
+  offline, both of which the API already supported.
+- Installable PWA: a web app manifest, icons rendered on the fly and a
+  network-first service worker.
+
 ## 1.1.0
 
 - The iPhone pool honours `IMEI_MIN_IPHONE`: models named without a generation

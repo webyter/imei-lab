@@ -31,7 +31,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 DB_URL = "https://raw.githubusercontent.com/MoazEb/tac-database/main/tac_full.csv"
 CACHE_DIR = Path(

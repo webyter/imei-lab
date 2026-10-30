@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import struct
 import threading
 import unittest
 import urllib.error
@@ -71,6 +72,37 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"gesturestart", body)
         self.assertIn(b"gesturechange", body)
         self.assertIn(b"e.touches.length > 1", body)
+
+    def test_manifest(self):
+        code, headers, body = get(self.port, "/manifest.webmanifest")
+        data = json.loads(body)
+        self.assertEqual(code, 200)
+        self.assertIn("manifest+json", headers["Content-Type"])
+        self.assertEqual(data["start_url"], "/")
+        self.assertEqual([i["sizes"] for i in data["icons"]], ["192x192", "512x512"])
+
+    def test_icons_are_png(self):
+        for path, size in (("/icon-192.png", 192), ("/icon-512.png", 512)):
+            code, headers, body = get(self.port, path)
+            self.assertEqual(code, 200, path)
+            self.assertEqual(headers["Content-Type"], "image/png", path)
+            self.assertTrue(body.startswith(b"\x89PNG\r\n\x1a\n"), path)
+            width, height = struct.unpack(">II", body[16:24])
+            self.assertEqual((width, height), (size, size), path)
+
+    def test_icon_is_cached(self):
+        self.assertIs(s.icon(192), s.icon(192))
+
+    def test_service_worker(self):
+        code, headers, body = get(self.port, "/sw.js")
+        self.assertEqual(code, 200)
+        self.assertIn("javascript", headers["Content-Type"])
+        self.assertIn(b"fetch", body)
+
+    def test_index_has_controls(self):
+        _, _, body = get(self.port, "/")
+        for needle in (b'id="count"', b'id="batch"', b'id="checkForm"', b'rel="manifest"'):
+            self.assertIn(needle, body)
 
     def test_health(self):
         code, _, body = get(self.port, "/health")
