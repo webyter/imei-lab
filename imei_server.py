@@ -61,7 +61,7 @@ PAGE = r"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#0b0d12">
 <title>IMEI Lab</title>
 <style>
@@ -70,7 +70,7 @@ PAGE = r"""<!doctype html>
     --acc1:#5b8cff; --acc2:#8b5cf6; --ok:#34d399;
   }
   *{box-sizing:border-box;}
-  html{-webkit-text-size-adjust:100%;}
+  html{-webkit-text-size-adjust:100%; touch-action:pan-x pan-y;}
   body{
     margin:0; min-height:100vh; min-height:100dvh;
     display:flex; flex-direction:column;
@@ -209,6 +209,17 @@ PAGE = r"""<!doctype html>
   </main>
 
 <script>
+/* Zoom is off everywhere. Safari ignores user-scalable=no and has no touch-action
+   that stops pinch, so block the pinch gestures and multi-touch moves directly. */
+const blockZoom = e => e.preventDefault();
+['gesturestart', 'gesturechange', 'gestureend'].forEach(
+  type => window.addEventListener(type, blockZoom, { passive: false, capture: true })
+);
+['touchstart', 'touchmove'].forEach(type =>
+  window.addEventListener(type, e => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false, capture: true })
+);
+window.addEventListener('wheel', e => { if (e.ctrlKey) e.preventDefault(); }, { passive: false });
+
 const $ = s => document.querySelector(s);
 let current = "";
 const fmt = d => d.length === 15 ? `${d.slice(0,2)} ${d.slice(2,8)} ${d.slice(8,14)} ${d.slice(14)}` : d;

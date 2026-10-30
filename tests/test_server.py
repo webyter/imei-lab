@@ -63,6 +63,15 @@ class ServerTests(unittest.TestCase):
         self.assertIn(b"min-height:100dvh", body)
         self.assertIn(b"@media (max-height:560px)", body)
 
+    def test_index_disables_zooming(self):
+        _, _, body = get(self.port, "/")
+        self.assertIn(b"maximum-scale=1", body)
+        self.assertIn(b"user-scalable=no", body)
+        self.assertIn(b"touch-action:pan-x pan-y", body)
+        self.assertIn(b"gesturestart", body)
+        self.assertIn(b"gesturechange", body)
+        self.assertIn(b"e.touches.length > 1", body)
+
     def test_health(self):
         code, _, body = get(self.port, "/health")
         data = json.loads(body)
