@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.0
+
+- The 22 MB TAC csv is no longer committed. Render and Docker fetch it during
+  the build, a plain checkout fetches it on first use, and `refresh_db.py`
+  writes a pinned copy to `data/tac_full.csv` (git-ignored).
+- A failed database load at startup now prints a clear error instead of a
+  traceback.
+
 ## 1.2.0
 
 - `refresh_db.py` updates the bundled TAC data, verifying the download before

@@ -36,16 +36,18 @@ cd imei-lab
 ./imei_lab.py generate --model "iPhone 15" -n 3
 ./imei_lab.py check 358426431038400 --online
 ./imei_lab.py lookup 35842643
-python3 refresh_db.py          # refresh the bundled TAC data
+python3 refresh_db.py          # fetch the TAC data up front
 
 ./run.sh            # web UI at http://127.0.0.1:8000
 ./run.sh 9000       # custom port
 HOST=0.0.0.0 ./run.sh
 ```
 
-The TAC database is bundled in `data/tac_full.csv` (275k rows, ~22 MB) and
-loaded into memory at startup (a few tens of MB). If it is missing, it is
-downloaded and cached in `~/.cache/imei-lab/`.
+The TAC database (275k rows, ~22 MB) is not committed. Render and Docker fetch
+it during the build with `refresh_db.py`; on a plain checkout the first run
+downloads it into `~/.cache/imei-lab/`. It is loaded into memory at startup (a
+few tens of MB). A `data/tac_full.csv` is used first when it exists, so
+`python3 refresh_db.py` pins a specific copy.
 
 The `--brand` and `--model` filters are case-insensitive.
 
@@ -92,16 +94,19 @@ ruff check .
 
 ## Data freshness
 
-`data/tac_full.csv` is a snapshot. To bring it up to date from upstream:
+The TAC data is not committed. `refresh_db.py` writes a verified copy to
+`data/tac_full.csv`, which is used first when present; its default source is
+upstream:
 
 ```bash
-python3 refresh_db.py            # download, verify and replace it
+python3 refresh_db.py            # download, verify and write data/tac_full.csv
 python3 refresh_db.py --dry-run  # report only
 ```
 
 It downloads to a temporary file, checks that it looks like a TAC database (at
-least 200k rows, and loadable), and only then replaces the bundled csv, so a
-failed run leaves the current copy untouched. Commit the result.
+least 200k rows, and loadable), and only then replaces the file, so a failed run
+leaves the current copy untouched. The file is git-ignored, so each machine or
+deploy fetches its own.
 
 ## Install
 
@@ -111,7 +116,8 @@ when the network is down.
 
 ## Deploy
 
-**Render**: create a Blueprint from `render.yaml`. The service starts with
+**Render**: create a Blueprint from `render.yaml`. The build installs the (empty)
+requirements and downloads the TAC data; the service then starts with
 `python3 imei_server.py --host 0.0.0.0 --port $PORT`.
 
 **Docker**:
@@ -120,6 +126,8 @@ when the network is down.
 docker build -t imei-lab .
 docker run -p 8000:8000 imei-lab
 ```
+
+The image fetches and verifies the TAC data during `docker build`.
 
 After deploying, set the `RENDER_URL` Actions secret to your public URL so
 `.github/workflows/keepalive.yml` can ping `/health` every ~14 minutes.

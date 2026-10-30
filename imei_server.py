@@ -17,6 +17,7 @@ import os
 import random
 import re
 import struct
+import sys
 import threading
 import time
 import urllib.request
@@ -675,7 +676,11 @@ def main() -> int:
     ap.add_argument("--host", default=os.environ.get("HOST") or "127.0.0.1")
     ap.add_argument("--port", type=int, default=_env_int("PORT", 8000))
     args = ap.parse_args()
-    init_data()
+    try:
+        init_data()
+    except Exception as e:  # noqa: BLE001
+        print(f"error: could not load the TAC database: {e}", file=sys.stderr)
+        return 1
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     srv.daemon_threads = True
     start_keepalive()

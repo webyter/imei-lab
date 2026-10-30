@@ -3,7 +3,7 @@ services:
     name: imei-lab
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python3 refresh_db.py
     startCommand: python3 imei_server.py --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:

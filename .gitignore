@@ -2,5 +2,7 @@ __pycache__/
 *.pyc
 *.part
 .venv/
-# Cached DB (bundled DB lives in data/ and IS meant to be committed)
+# Cached DB
 .cache/
+# The TAC csv is downloaded, not committed: see refresh_db.py
+data/tac_full.csv
