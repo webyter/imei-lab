@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.2
+
+- A full rate-limit key table now evicts the least recently used key instead of
+  answering `429` to new visitors, so a busy site can't lock anyone out.
+- The iPhone pool falls back to every iPhone when nothing meets
+  `IMEI_MIN_IPHONE`, instead of leaving the app with an empty pool and `503`.
+
 ## 1.4.1
 
 - `imei_server.main()` accepts an argv list again, which the port-range test

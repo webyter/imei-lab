@@ -75,7 +75,7 @@ imeiproof.com and imei.org, so it is concurrency limited and answers `503` with
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address |
 | `IMEI_LAB_DB` | bundled DB | Path to a TAC csv |
 | `IMEI_LAB_CACHE` | `~/.cache/imei-lab` | Download cache |
-| `IMEI_MIN_IPHONE` | `13` | Minimum iPhone generation in the web pool (`0` = all; models named without a number, e.g. XS, XR, SE, count as `0`) |
+| `IMEI_MIN_IPHONE` | `13` | Minimum iPhone generation in the web pool (`0` = all; models named without a number, e.g. XS, XR, SE, count as `0`; if nothing matches, the whole iPhone pool is used) |
 | `RATE_LIMIT` | `120` | Requests per IP per 60s on `/api/*` |
 | `KEEPALIVE` / `KEEPALIVE_URL` | off / `RENDER_EXTERNAL_URL` | Self-ping |
 | `KEEPALIVE_INTERVAL` | `600` | Seconds between self-pings |

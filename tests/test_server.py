@@ -286,8 +286,8 @@ class IPhonePoolTests(unittest.TestCase):
     def test_zero_includes_pre13_and_unnumbered_models(self):
         self.assertEqual(self.init_pool("0"), self.ALL_IPHONES)
 
-    def test_empty_when_no_models_meet_minimum(self):
-        self.assertEqual(self.init_pool("17"), set())
+    def test_falls_back_when_no_models_meet_minimum(self):
+        self.assertEqual(self.init_pool("17"), self.ALL_IPHONES)
 
     def test_iphone_num(self):
         self.assertEqual(s._iphone_num("APPLE IPHONE XS, Apple iPhone XS, A1920"), 0)
@@ -371,15 +371,17 @@ class RateLimiterTests(unittest.TestCase):
             limiter.allow("d")
             self.assertEqual(list(limiter._buckets), ["d"])
 
-    def test_full_key_table_does_not_reset_active_limits(self):
+    def test_full_key_table_evicts_the_least_recent_key(self):
         clock = FakeClock()
         with mock.patch.object(s.time, "monotonic", clock):
             limiter = s.RateLimiter(limit=1, window=60, max_keys=2)
             self.assertTrue(limiter.allow("a")[0])
+            clock.advance(1)
             self.assertTrue(limiter.allow("b")[0])
+            clock.advance(1)
+            self.assertTrue(limiter.allow("c")[0])
+            self.assertEqual(set(limiter._buckets), {"b", "c"})
             self.assertFalse(limiter.allow("c")[0])
-            self.assertFalse(limiter.allow("a")[0])
-            self.assertEqual(set(limiter._buckets), {"a", "b"})
 
 
 class ServerConfigTests(unittest.TestCase):

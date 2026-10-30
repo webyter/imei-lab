@@ -86,6 +86,8 @@ def init_data() -> None:
     min_v = max(0, _env_int("IMEI_MIN_IPHONE", 13))
     all_iphones = [(tac, b, s) for tac, (b, s) in DB.items() if b.upper() == "APPLE" and "IPHONE" in s.upper()]
     IPHONE_TACS = [x for x in all_iphones if _iphone_num(x[2]) >= min_v]
+    if not IPHONE_TACS:  # never an empty pool just because of the minimum
+        IPHONE_TACS = all_iphones
 
 PAGE = r"""<!doctype html>
 <html lang="en">
@@ -518,7 +520,11 @@ CSP = (
 
 
 class RateLimiter:
-    """Sliding-window per-key limiter that also bounds memory."""
+    """Sliding-window per-key limiter that also bounds memory.
+
+    When the key table is full, stale keys are dropped and, if it is still full,
+    the least recently used key is evicted so a new visitor is never refused.
+    """
 
     def __init__(self, limit: int = 120, window: float = 60.0, max_keys: int = 10_000) -> None:
         self.limit = limit
@@ -527,22 +533,25 @@ class RateLimiter:
         self._buckets: dict[str, list[float]] = {}
         self._lock = threading.Lock()
 
+    def _evict_lru(self) -> None:
+        oldest = min(self._buckets, key=lambda k: self._buckets[k][-1] if self._buckets[k] else float("-inf"))
+        del self._buckets[oldest]
+
     def allow(self, key: str) -> tuple[bool, int]:
         now = time.monotonic()
         with self._lock:
-            if len(self._buckets) >= self.max_keys:
+            if key not in self._buckets and len(self._buckets) >= self.max_keys:
                 cutoff = now - self.window
                 for k in [k for k, v in self._buckets.items() if not v or v[-1] <= cutoff]:
                     del self._buckets[k]
-                if len(self._buckets) >= self.max_keys and key not in self._buckets:
-                    next_expiry = min(v[-1] + self.window for v in self._buckets.values() if v)
-                    return False, max(1, math.ceil(next_expiry - now))
+                while len(self._buckets) >= self.max_keys:
+                    self._evict_lru()
             bucket = self._buckets.setdefault(key, [])
             cutoff = now - self.window
             while bucket and bucket[0] <= cutoff:
                 bucket.pop(0)
             if len(bucket) >= self.limit:
-                return False, max(1, int(self.window - (now - bucket[0])))
+                return False, max(1, math.ceil(self.window - (now - bucket[0])))
             bucket.append(now)
             return True, 0
 

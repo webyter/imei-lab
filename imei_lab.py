@@ -32,7 +32,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-__version__ = "1.4.1"
+__version__ = "1.4.2"
 
 DB_URL = "https://raw.githubusercontent.com/MoazEb/tac-database/main/tac_full.csv"
 MIN_DB_TACS = 200_000
