@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.part
+.venv/
+# Cached DB (bundled DB lives in data/ and IS meant to be committed)
+.cache/
